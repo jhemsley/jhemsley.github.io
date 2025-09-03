@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>iSchool Program–Course Network (Mobile)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/d3@7/dist/d3.min.js"></script>
+    <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+    <style>
+      html, body, #root { height: 100%; }
+      body { margin: 0; background: white; }
+      svg { touch-action: none; } /* better gesture handling on mobile */
+      svg text { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useRef, useState } = React;
+
+      const PROGRAM_PALETTE = [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+        "#4e79a7", "#f28e2c", "#e15759", "#76b7b2", "#59a14f",
+        "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac"
+      ];
+
+      function buildGraph(rows) {
+        const normalized = rows.map((r) => {
+          const obj = {}; for (const k in r) obj[k.trim()] = (r[k] ?? "").trim(); return obj;
+        });
+        const sample = normalized[0] || {};
+        const programKey = Object.keys(sample).find((k) => /program/i.test(k)) || "Program";
+        const courseKey  = Object.keys(sample).find((k) => /course/i.test(k)) || "Course";
+
+        const nodesMap = new Map();
+        const edges = [];
+        let colorIdx = 0;
+
+        function ensureNode(id, type) {
+          if (!nodesMap.has(id)) {
+            nodesMap.set(id, { id, type });
+            if (type === "program") {
+              const c = PROGRAM_PALETTE[colorIdx % PROGRAM_PALETTE.length];
+              nodesMap.get(id).color = c;
+              colorIdx += 1;
+            } else {
+              nodesMap.get(id).color = "#666";
+            }
+          }
+        }
+
+        normalized.forEach((row, i) => {
+          const program = String(row[programKey] ?? "").trim();
+          const course  = String(row[courseKey]  ?? "").trim();
+          if (!program || !course) return;
+          ensureNode(program, "program");
+          ensureNode(course,  "course");
+          edges.push({ id: `e${i}`, source: program, target: course, program });
+        });
+
+        const degree = new Map();
+        edges.forEach((e) => {
+          degree.set(e.source, (degree.get(e.source) || 0) + 1);
+          degree.set(e.target, (degree.get(e.target) || 0) + 1);
+        });
+        nodesMap.forEach((n) => n.degree = degree.get(n.id) || 0);
+
+        return { nodes: Array.from(nodesMap.values()), edges };
+      }
+
+      function buildAdjacency(nodes, edges) {
+        const idToIndex = new Map();
+        nodes.forEach((n, i) => idToIndex.set(n.id, i));
+        const adj = Array.from({ length: nodes.length }, () => []);
+        edges.forEach((e) => { const u = idToIndex.get(e.source), v = idToIndex.get(e.target); adj[u].push(v); adj[v].push(u); });
+        return { idToIndex, adj };
+      }
+
+      function connectedComponents(nodes, adj) {
+        const n = nodes.length; const seen = new Array(n).fill(false); const comps = [];
+        for (let i = 0; i < n; i++) {
+          if (seen[i]) continue; const stack = [i]; seen[i] = true; const comp = [];
+          while (stack.length) { const u = stack.pop(); comp.push(u); for (const v of adj[u]) if (!seen[v]) { seen[v] = true; stack.push(v); } }
+          comps.push(comp);
+        }
+        return comps;
+      }
+
+      function allPairsShortestPaths(adj) {
+        const n = adj.length; const dist = Array.from({ length: n }, () => new Array(n).fill(Infinity));
+        for (let s = 0; s < n; s++) {
+          const q = [s]; dist[s][s] = 0; let qi = 0;
+          while (qi < q.length) { const u = q[qi++]; for (const v of adj[u]) if (dist[s][v] === Infinity) { dist[s][v] = dist[s][u] + 1; q.push(v); } }
+        }
+        return dist;
+      }
+
+      function kamadaKawaiLayout(nodes, edges, comp) {
+        const { adj } = buildAdjacency(nodes, edges);
+        const distAll = allPairsShortestPaths(adj);
+        const idxArr = comp; const m = idxArr.length;
+        const pairs = []; let sumL = 0, cntL = 0;
+        for (let a = 0; a < m; a++) for (let b = a + 1; b < m; b++) { const i = idxArr[a], j = idxArr[b]; const d = distAll[i][j]; if (!isFinite(d) || d === 0) continue; sumL += d; cntL += 1; }
+        const L0 = cntL ? 1 / (sumL / cntL) : 1;
+        for (let a = 0; a < m; a++) for (let b = a + 1; b < m; b++) { const i = idxArr[a], j = idxArr[b]; const d = distAll[i][j]; if (!isFinite(d) || d === 0) continue; const lij = L0 * d; const wij = 1 / (d * d); pairs.push([a, b, lij, wij]); }
+        const pos = Array.from({ length: m }, (_, k) => ({ x: 0.5 + 0.4 * Math.cos((2 * Math.PI * k) / m), y: 0.5 + 0.4 * Math.sin((2 * Math.PI * k) / m) }));
+        const T = Math.min(500, 80 + 16 * m); let step = 0.02;
+        for (let t = 0; t < T; t++) {
+          const grad = Array.from({ length: m }, () => ({ x: 0, y: 0 }));
+          for (const [a, b, lij, wij] of pairs) {
+            const dx = pos[a].x - pos[b].x, dy = pos[a].y - pos[b].y; const d = Math.hypot(dx, dy) || 1e-6;
+            const coeff = 2 * wij * (1 - lij / d); const gx = coeff * dx, gy = coeff * dy;
+            grad[a].x += gx; grad[a].y += gy; grad[b].x -= gx; grad[b].y -= gy;
+          }
+          for (let a = 0; a < m; a++) { pos[a].x -= step * grad[a].x; pos[a].y -= step * grad[a].y; }
+          if ((t + 1) % 50 === 0) step *= 0.7;
+        }
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (let a = 0; a < m; a++) { minX = Math.min(minX, pos[a].x); maxX = Math.max(maxX, pos[a].x); minY = Math.min(minY, pos[a].y); maxY = Math.max(maxY, pos[a].y); }
+        const scaleX = maxX - minX || 1, scaleY = maxY - minY || 1;
+        const out = {};
+        for (let a = 0; a < m; a++) { const id = nodes[idxArr[a]].id; out[id] = { x: (pos[a].x - minX) / scaleX, y: (pos[a].y - minY) / scaleY }; }
+        return out;
+      }
+
+      function forceDirectedLayout(nodes, edges) {
+        const idToNode = new Map(nodes.map((n) => [n.id, { x: Math.random(), y: Math.random() }]));
+        const sim = d3.forceSimulation(nodes.map((n) => ({ id: n.id, x: idToNode.get(n.id).x * 500, y: idToNode.get(n.id).y * 500 })))
+          .force("link", d3.forceLink(edges.map((e) => ({ source: e.source, target: e.target }))).id((d) => d.id).distance(50).strength(0.8))
+          .force("charge", d3.forceManyBody().strength(-200))
+          .force("center", d3.forceCenter(250, 250))
+          .stop();
+        sim.tick(160);
+        const out = {}; (sim.nodes()).forEach((n) => { out[n.id] = { x: (n.x || 0) / 500, y: (n.y || 0) / 500 }; });
+        return out;
+      }
+
+      function circularLayout(nodes) {
+        const n = nodes.length; const out = {};
+        nodes.forEach((node, i) => { out[node.id] = { x: 0.5 + 0.45 * Math.cos((2 * Math.PI * i) / n), y: 0.5 + 0.45 * Math.sin((2 * Math.PI * i) / n) }; });
+        return out;
+      }
+
+      function bipartiteLayout(nodes, edges) {
+        const programs = nodes.filter((n) => n.type === "program");
+        const courses = nodes.filter((n) => n.type === "course");
+        const out = {};
+        programs.forEach((n, i) => { out[n.id] = { x: 0.2, y: 0.1 + (0.8 * i) / Math.max(1, programs.length - 1) }; });
+        courses.forEach((n, i) => { out[n.id] = { x: 0.8, y: 0.1 + (0.8 * i) / Math.max(1, courses.length - 1) }; });
+        return out;
+      }
+
+      function randomLayout(nodes) {
+        const out = {};
+        nodes.forEach((n) => { out[n.id] = { x: Math.random(), y: Math.random() }; });
+        return out;
+      }
+
+      function spiralLayout(nodes) {
+        const out = {};
+        const n = nodes.length || 1, turns = 3;
+        nodes.forEach((node, i) => {
+          const t = i / Math.max(1, n - 1);
+          const angle = 2 * Math.PI * turns * t;
+          const r = 0.1 + 0.35 * t;
+          out[node.id] = { x: 0.5 + r * Math.cos(angle), y: 0.5 + r * Math.sin(angle) };
+        });
+        return out;
+      }
+
+      function gridLayout(nodes) {
+        const out = {};
+        const n = nodes.length || 1;
+        const cols = Math.ceil(Math.sqrt(n));
+        const rows = Math.ceil(n / cols);
+        nodes.forEach((node, i) => {
+          const r = Math.floor(i / cols);
+          const c = i % cols;
+          out[node.id] = { x: (c + 0.5) / cols, y: (r + 0.5) / rows };
+        });
+        return out;
+      }
+
+      function twoRingLayout(nodes) {
+        const programs = nodes.filter((n) => n.type === "program");
+        const courses = nodes.filter((n) => n.type === "course");
+        const out = {};
+        const rp = 0.25, rc = 0.45;
+        programs.forEach((n, i) => {
+          const angle = (2 * Math.PI * i) / Math.max(1, programs.length);
+          out[n.id] = { x: 0.5 + rp * Math.cos(angle), y: 0.5 + rp * Math.sin(angle) };
+        });
+        courses.forEach((n, i) => {
+          const angle = (2 * Math.PI * i) / Math.max(1, courses.length);
+          out[n.id] = { x: 0.5 + rc * Math.cos(angle), y: 0.5 + rc * Math.sin(angle) };
+        });
+        return out;
+      }
+
+      function ringInnerForceLayout(nodes, edges, opts = {}) {
+        const width = 500, height = 500;
+        const cx = width / 2, cy = height / 2;
+        const R = Math.min(width, height) * 0.42;
+        const innerR = R - 40;
+
+        const programs = nodes.filter((n) => n.type === "program");
+        const progOrder = new Map();
+        programs.forEach((p, i) => progOrder.set(p.id, i));
+        const progCount = Math.max(1, programs.length);
+
+        const simNodes = nodes.map((n) => {
+          if (n.type === "program") {
+            const idx = progOrder.get(n.id) || 0;
+            const angle = (2 * Math.PI * idx) / progCount;
+            const x = cx + R * Math.cos(angle);
+            const y = cy + R * Math.sin(angle);
+            return { id: n.id, x, y, fx: x, fy: y };
+          } else {
+            return { id: n.id, x: cx + (Math.random() * 2 - 1) * innerR * 0.6, y: cy + (Math.random() * 2 - 1) * innerR * 0.6 };
+          }
+        });
+
+        const links = edges.map((e) => ({ source: e.source, target: e.target }));
+        const ticks = opts.mobile ? 140 : 320;
+
+        const sim = d3.forceSimulation(simNodes)
+          .force("link", d3.forceLink(links).id((d) => d.id).distance(42).strength(0.7))
+          .force("charge", d3.forceManyBody().strength(-70))
+          .force("center", d3.forceCenter(cx, cy))
+          .force("collision", d3.forceCollide().radius((d) => 10))
+          .stop();
+
+        sim.tick(ticks);
+
+        simNodes.forEach((n) => {
+          if (n.fx != null && n.fy != null) return;
+          const dx = n.x - cx, dy = n.y - cy;
+          const dist = Math.hypot(dx, dy) || 1e-6;
+          if (dist > innerR) {
+            const s = innerR / dist;
+            n.x = cx + dx * s;
+            n.y = cy + dy * s;
+          }
+        });
+
+        const out = {};
+        simNodes.forEach((n) => { out[n.id] = { x: n.x / width, y: n.y / height }; });
+        return out;
+      }
+
+      function computePositions(nodes, edges, layout, mobile) {
+        if (layout === "Circular") return circularLayout(nodes);
+        if (layout === "Force-Directed") return forceDirectedLayout(nodes, edges);
+        if (layout === "Bipartite") return bipartiteLayout(nodes, edges);
+        if (layout === "Random") return randomLayout(nodes);
+        if (layout === "Spiral") return spiralLayout(nodes);
+        if (layout === "Grid") return gridLayout(nodes);
+        if (layout === "Two-Ring") return twoRingLayout(nodes);
+        if (layout === "Ring + Inner Force") return ringInnerForceLayout(nodes, edges, { mobile });
+
+        const { adj } = buildAdjacency(nodes, edges); const comps = connectedComponents(nodes, adj);
+        const perComp = []; const positions = {};
+        for (const comp of comps) { const kk = kamadaKawaiLayout(nodes, edges, comp); const pts = comp.map((idx) => ({ id: nodes[idx].id, x: kk[nodes[idx].id].x, y: kk[nodes[idx].id].y })); perComp.push(pts); }
+        const cols = Math.ceil(Math.sqrt(perComp.length));
+        perComp.forEach((pts, i) => { const gx = i % cols, gy = Math.floor(i / cols); const offsetX = (gx + 0.5) / cols, offsetY = (gy + 0.5) / cols; const scale = 0.8 / cols; pts.forEach((p) => { positions[p.id] = { x: offsetX + scale * (p.x - 0.5), y: offsetY + scale * (p.y - 0.5) }; }); });
+        return positions;
+      }
+
+      function radiusForNode(n, maxDegree, maxNodeSize) {
+        const minR = 6;
+        const deg = n.degree || 0;
+        const t = Math.pow(deg / Math.max(1, maxDegree), 1.5);
+        return minR + (maxNodeSize - minR) * t;
+      }
+
+      function download(filename, href) { const a = document.createElement("a"); a.href = href; a.download = filename; document.body.appendChild(a); a.click(); document.body.removeChild(a); }
+      function exportSVG(svgRef) {
+        const svg = svgRef.current; if (!svg) return; const serializer = new XMLSerializer(); const copy = svg.cloneNode(true);
+        const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect"); bg.setAttribute("x", "0"); bg.setAttribute("y", "0"); bg.setAttribute("width", String(svg.clientWidth)); bg.setAttribute("height", String(svg.clientHeight)); bg.setAttribute("fill", "white"); copy.insertBefore(bg, copy.firstChild);
+        const str = serializer.serializeToString(copy); const blob = new Blob([str], { type: "image/svg+xml;charset=utf-8" }); const url = URL.createObjectURL(blob); download("network.svg", url); URL.revokeObjectURL(url);
+      }
+      async function exportPNG(svgRef) {
+        const svg = svgRef.current; if (!svg) return; const serializer = new XMLSerializer(); const copy = svg.cloneNode(true);
+        const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect"); bg.setAttribute("x", "0"); bg.setAttribute("y", "0"); bg.setAttribute("width", String(svg.clientWidth)); bg.setAttribute("height", String(svg.clientHeight)); bg.setAttribute("fill", "white"); copy.insertBefore(bg, copy.firstChild);
+        const str = serializer.serializeToString(copy); const svgBlob = new Blob([str], { type: "image/svg+xml;charset=utf-8" }); const url = URL.createObjectURL(svgBlob); const img = new Image(); const canvas = document.createElement("canvas"); canvas.width = svg.clientWidth; canvas.height = svg.clientHeight; const ctx = canvas.getContext("2d"); await new Promise((resolve) => { img.onload = () => resolve(); img.src = url; }); ctx.fillStyle = "white"; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(img, 0, 0); URL.revokeObjectURL(url); download("network.png", canvas.toDataURL("image/png"));
+      }
+
+      function App() {
+        const [rows, setRows] = useState([]);
+        const [nodes, setNodes] = useState([]);
+        const [edges, setEdges] = useState([]);
+        const [layoutName, setLayoutName] = useState("Ring + Inner Force");
+        const [positions, setPositions] = useState({});
+        const [showLabels, setShowLabels] = useState(true);
+        const [labelPrograms, setLabelPrograms] = useState(new Set());
+        const [selectedNode, setSelectedNode] = useState(null);
+        const [search, setSearch] = useState("");
+        const [fixed, setFixed] = useState(new Set());
+        const [maxNodeSize, setMaxNodeSize] = useState(36);
+        const [mobileMode, setMobileMode] = useState(true); // default ON for phones
+        const [drawerOpen, setDrawerOpen] = useState(false);
+        const [pasteOpen, setPasteOpen] = useState(false);
+        const [pasteText, setPasteText] = useState("Program,Course\nBS in Information Management,IST101\nBS in Information Management,PSY205\nBS in Information Management,MAT121\nMS in Applied Data Science,IST652\nMS in Applied Data Science,IST718\nMS in Applied Data Science,MAT221");
+
+        const svgRef = useRef(null); const zoomRef = useRef(null); const gRef = useRef(null);
+        const containerRef = useRef(null); const [size, setSize] = useState({ width: 800, height: 600 });
+        const dragRafLocked = useRef(false);
+
+        useEffect(() => { if (!rows.length) return; const { nodes, edges } = buildGraph(rows); setNodes(nodes); setEdges(edges); }, [rows]);
+
+        useEffect(() => {
+          if (!nodes.length) return;
+          const base = computePositions(nodes, edges, layoutName, mobileMode);
+          const merged = { ...base };
+          for (const id of fixed) if (positions[id]) merged[id] = positions[id];
+          setPositions(merged);
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [nodes, edges, layoutName, mobileMode]);
+
+        useEffect(() => { const el = containerRef.current; if (!el) return; const ro = new ResizeObserver(() => { setSize({ width: el.clientWidth, height: el.clientHeight }); }); ro.observe(el); return () => ro.disconnect(); }, []);
+
+        useEffect(() => {
+          const svg = svgRef.current; const g = gRef.current; if (!svg || !g) return;
+          const zoomed = (event) => { const { transform } = event; g.setAttribute("transform", transform.toString()); };
+          const zoom = d3.zoom().scaleExtent([0.2, 8]).on("zoom", zoomed);
+          d3.select(svg).call(zoom); zoomRef.current = zoom;
+        }, []);
+
+        const idToNode = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+        const programList = useMemo(() => nodes.filter((n) => n.type === "program").map((n) => n.id).sort(), [nodes]);
+        const margin = 12; // tighter margins on mobile
+        const toScreen = (p) => ({ x: margin + (p.x || 0.5) * (size.width - 2 * margin), y: margin + (p.y || 0.5) * (size.height - 2 * margin) });
+
+        const neighbors = useMemo(() => { const map = new Map(); nodes.forEach((n) => map.set(n.id, new Set())); edges.forEach((e) => { map.get(e.source).add(e.target); map.get(e.target).add(e.source); }); return map; }, [nodes, edges]);
+        const isEdgeActive = (e) => !selectedNode || e.source === selectedNode || e.target === selectedNode;
+        const isNodeDimmed = (id) => selectedNode && !(id === selectedNode || neighbors.get(selectedNode).has(id));
+
+        useEffect(() => {
+          const svg = svgRef.current; if (!svg) return;
+          const selection = d3.select(svg).selectAll("g.node-group");
+          const drag = d3.drag()
+            .on("start", function(event) {
+              event.sourceEvent?.stopPropagation?.();
+              const group = event.sourceEvent?.target?.closest?.("g.node-group");
+              const id = group?.getAttribute ? group.getAttribute("data-id") : null;
+              if (!id) return;
+              setSelectedNode(id);
+              setFixed((prev) => new Set([...prev, id]));
+            })
+            .on("drag", function(event) {
+              const svg = svgRef.current; if (!svg) return;
+              const group = event.sourceEvent?.target?.closest?.("g.node-group");
+              const id = group?.getAttribute ? group.getAttribute("data-id") : null;
+              if (!id) return;
+              if (dragRafLocked.current) return;
+              dragRafLocked.current = true;
+              requestAnimationFrame(() => {
+                const z = d3.zoomTransform(svg);
+                const pt = z.invert([event.x, event.y]);
+                const ux = pt[0], uy = pt[1];
+                const px = (ux - margin) / Math.max(1, size.width - 2 * margin);
+                const py = (uy - margin) / Math.max(1, size.height - 2 * margin);
+                setPositions((prev) => ({ ...prev, [id]: { x: Math.max(0, Math.min(1, px)), y: Math.max(0, Math.min(1, py)) } }));
+                dragRafLocked.current = false;
+              });
+            })
+            .on("end", function(event) {
+              const group = event.sourceEvent?.target?.closest?.("g.node-group");
+              const id = group?.getAttribute ? group.getAttribute("data-id") : null;
+              if (!id) return;
+              setFixed((prev) => new Set([...prev, id]));
+            });
+          selection.call(drag);
+        }, [nodes.length, size.width, size.height]);
+
+        function runSearch() {
+          const q = search.trim().toLowerCase(); if (!q) return; const match = nodes.find((n) => n.id.toLowerCase().includes(q)); if (!match) return; setSelectedNode(match.id);
+          const svg = svgRef.current; const p = toScreen(positions[match.id] || { x: 0.5, y: 0.5 }); const current = d3.zoomTransform(svg); const k = Math.max(1.2, current.k || 1); const tx = size.width / 2 - k * p.x; const ty = size.height / 2 - k * p.y; d3.select(svg).transition().duration(400).call(zoomRef.current.transform, d3.zoomIdentity.translate(tx, ty).scale(k));
+        }
+
+        function onFileSelected(file) { Papa.parse(file, { header: true, skipEmptyLines: true, complete: (res) => { const data = (res.data || []).filter(Boolean); setRows(data); setDrawerOpen(false); } }); }
+        function onPasteLoad() {
+          const text = pasteText;
+          const parsed = Papa.parse(text.trim(), { header: true, skipEmptyLines: true });
+          const data = (parsed.data || []).filter(Boolean);
+          setRows(data); setDrawerOpen(false);
+        }
+
+        function resetView() { const svg = svgRef.current; if (!svg) return; d3.select(svg).transition().duration(300).call(zoomRef.current.transform, d3.zoomIdentity); setSelectedNode(null); }
+        function resetPositions() { setFixed(new Set()); setPositions(computePositions(nodes, edges, layoutName, mobileMode)); }
+        const edgePath = (e) => { const a = toScreen(positions[e.source] || { x: 0.5, y: 0.5 }); const b = toScreen(positions[e.target] || { x: 0.5, y: 0.5 }); return `M${a.x},${a.y} L${b.x},${b.y}`; };
+        function showLabelFor(id) {
+          if (!showLabels) return false; if (labelPrograms.size === 0) return true; const n = idToNode.get(id); if (n.type === "program") return labelPrograms.has(n.id); const inc = edges.filter((e) => e.target === id || e.source === id).map((e) => e.program); return inc.some((p) => labelPrograms.has(p));
+        }
+
+        const maxDegree = useMemo(() => (nodes.length ? Math.max(...nodes.map(n => n.degree || 0)) : 1), [nodes]);
+        const drawableEdges = mobileMode ? (selectedNode ? edges.filter(isEdgeActive) : edges.slice(0, Math.min(edges.length, 800))) : edges;
+        const drawableNodes = nodes;
+        const isISTCourse = (id) => /^IST/i.test(id);
+
+        // Top bar for mobile
+        return (
+          <div className="h-screen w-full flex flex-col bg-white text-gray-900">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200">
+              <button className="px-3 py-2 rounded-lg bg-gray-900 text-white text-sm" onClick={() => setDrawerOpen(true)}>Menu</button>
+              <div className="font-semibold">iSchool Program–Course Network</div>
+              <button className="px-3 py-2 rounded-lg bg-gray-100 text-sm" onClick={resetView}>Reset view</button>
+            </div>
+
+            {/* Canvas */}
+            <div className="flex-1" ref={containerRef}>
+              <svg ref={svgRef} width={size.width} height={size.height} className="bg-white">
+                <g ref={gRef}>
+                  {/* Edges */}
+                  {drawableEdges.map((e) => {
+                    const programColor = idToNode.get(e.program)?.color || "#999";
+                    return <path key={e.id} d={edgePath(e)} stroke={selectedNode ? (isEdgeActive(e) ? programColor : "#ccc") : programColor} strokeWidth={1.4} fill="none" opacity={selectedNode ? (isEdgeActive(e) ? 0.95 : 0.45) : 0.85} />;
+                  })}
+
+                  {/* Nodes */}
+                  {drawableNodes.map((n) => {
+                    const p = toScreen(positions[n.id] || { x: 0.5, y: 0.5 });
+                    const r = radiusForNode(n, maxDegree, maxNodeSize);
+                    const fill = n.type === "program" ? (n.color || "#000") : "#666";
+                    const stroke = selectedNode === n.id ? "#111" : "#fff";
+                    const opacity = isNodeDimmed(n.id) ? 0.25 : 1;
+                    const labelFill = n.type === "program" ? "#111" : (isISTCourse(n.id) ? "#000" : "#ef4444");
+                    return (
+                      <g className="node-group" data-id={n.id} key={n.id} transform={`translate(${p.x},${p.y})`} onClick={(ev) => { ev.stopPropagation?.(); setSelectedNode(n.id); }} style={{ cursor: "pointer" }}>
+                        <circle r={r} fill={fill} stroke={stroke} strokeWidth={1.5} opacity={opacity} />
+                        {showLabelFor(n.id) && (
+                          <text x={0} y={-(r + 6)} textAnchor="middle" fontSize={n.type === "program" ? 14 : 12} fontWeight={n.type === "program" ? 700 : 400} fill={labelFill} className="select-none" style={{ pointerEvents: "none" }}>{n.id}</text>
+                        )}
+                      </g>
+                    );
+                  })}
+                </g>
+              </svg>
+            </div>
+
+            {/* Drawer */}
+            {drawerOpen && (
+              <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setDrawerOpen(false)}>
+                <div className="absolute top-0 left-0 h-full w-[85%] max-w-xs bg-white shadow-2xl p-4" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="font-semibold">Controls</div>
+                    <button className="px-2 py-1 rounded bg-gray-100" onClick={() => setDrawerOpen(false)}>Close</button>
+                  </div>
+
+                  <div className="space-y-3 text-sm">
+                    <div>
+                      <label className="block font-medium mb-1">Load data</label>
+                      <input type="file" accept=".csv" onChange={(e) => e.target.files && onFileSelected(e.target.files[0])} className="block w-full text-sm" />
+                      <button className="mt-2 text-blue-600 underline" onClick={() => setPasteOpen((v) => !v)}>{pasteOpen ? "Hide paste area" : "Paste CSV instead"}</button>
+                      {pasteOpen && (
+                        <div className="mt-2 space-y-2">
+                          <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} rows={6} className="w-full border rounded p-2 font-mono text-xs"></textarea>
+                          <button className="w-full py-2 bg-blue-600 text-white rounded-lg" onClick={onPasteLoad}>Load pasted CSV</button>
+                        </div>
+                      )}
+                      <div className="mt-1 text-xs text-gray-500">{rows.length ? `${rows.length} rows loaded` : `No data yet`}</div>
+                    </div>
+
+                    <div>
+                      <label className="block font-medium mb-1">Layout</label>
+                      <select value={layoutName} onChange={(e) => setLayoutName(e.target.value)} className="w-full border rounded-md px-2 py-2">
+                        <option>Ring + Inner Force</option>
+                        <option>Kamada–Kawai</option>
+                        <option>Force-Directed</option>
+                        <option>Circular</option>
+                        <option>Bipartite</option>
+                        <option>Two-Ring</option>
+                        <option>Grid</option>
+                        <option>Spiral</option>
+                        <option>Random</option>
+                      </select>
+                      <div className="flex gap-2 pt-2">
+                        <button className="flex-1 py-2 bg-gray-900 text-white rounded-lg" onClick={resetPositions}>Reset positions</button>
+                        <button className="flex-1 py-2 bg-gray-100 rounded-lg" onClick={resetView}>Reset view</button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={mobileMode} onChange={(e) => setMobileMode(e.target.checked)} />
+                        <span>Mobile Mode (faster)</span>
+                      </label>
+                    </div>
+
+                    <div>
+                      <label className="block font-medium mb-1">Max node size</label>
+                      <input type="range" min="16" max="64" step="1" value={maxNodeSize} onChange={(e) => setMaxNodeSize(Number(e.target.value) || 36)} className="w-full" />
+                      <div className="text-xs text-gray-500">Current: {maxNodeSize}</div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} />
+                      <span>Show labels</span>
+                    </div>
+
+                    <div>
+                      <div className="font-medium mb-1">Show labels for programs</div>
+                      <div className="max-h-28 overflow-y-auto border rounded-md p-2 space-y-1">
+                        {programList.map((p) => (
+                          <label key={p} className="flex items-center gap-2">
+                            <input type="checkbox" checked={labelPrograms.has(p)} onChange={(e) => { setLabelPrograms((prev) => { const n = new Set(prev); if (e.target.checked) n.add(p); else n.delete(p); return n; }); }} />
+                            <span className="inline-flex items-center gap-2">
+                              <span className="w-3 h-3 inline-block rounded-sm" style={{ background: idToNode.get(p)?.color || "#000" }} /> {p}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="mt-1 flex gap-3 text-xs">
+                        <button className="underline text-gray-600" onClick={() => setLabelPrograms(new Set())}>Clear</button>
+                        <button className="underline text-gray-600" onClick={() => setLabelPrograms(new Set(programList))}>All</button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block font-medium mb-1">Search</label>
+                      <div className="flex gap-2">
+                        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Course or program" className="border rounded-md px-2 py-2 flex-1" />
+                        <button onClick={runSearch} className="px-3 py-2 bg-blue-600 text-white rounded-lg">Go</button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="font-medium mb-1">Export</div>
+                      <div className="flex gap-2">
+                        <button onClick={() => exportPNG(svgRef)} className="flex-1 py-2 bg-green-600 text-white rounded-lg">PNG</button>
+                        <button onClick={() => exportSVG(svgRef)} className="flex-1 py-2 bg-gray-900 text-white rounded-lg">SVG</button>
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-gray-500">
+                      <p>Tip: with Mobile Mode on, edges are thinned when nothing is selected. Tap a node to highlight its connections.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
