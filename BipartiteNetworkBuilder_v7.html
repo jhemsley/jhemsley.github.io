@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bipartite Network Builder (No-Overlap Edition)</title>
+    <!-- Tailwind via CDN for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React 18 UMD builds + Babel for in-browser JSX -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- D3 and PapaParse UMD -->
+    <script src="https://unpkg.com/d3@7/dist/d3.min.js"></script>
+    <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+    <style>
+      html, body, #root { height: 100%; }
+      body { margin: 0; background: white; }
+      svg text { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+      input[type="range"] { width: 100%; }
+      .ctrl-row { display: grid; grid-template-columns: 1fr auto; gap: .5rem; align-items: center; }
+      .ctrl-row > span { font-variant-numeric: tabular-nums; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useRef, useState } = React;
+
+      // Palette for LEFT (first column) nodes
+      const LEFT_PALETTE = [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+        "#4e79a7", "#f28e2c", "#e15759", "#76b7b2", "#59a14f",
+        "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac"
+      ];
+
+      // Build nodes (left, right) and edges from CSV rows taking the FIRST TWO COLUMNS only
+      function buildGraph(rows) {
+        // Normalize rows to [col1, col2] taking first two properties in order
+        const normalized = rows.map((r) => {
+          const entries = Object.entries(r);
+          const [k1, v1] = entries[0] || ["", ""];
+          const [k2, v2] = entries[1] || ["", ""];
+          return [String(v1 ?? "").trim(), String(v2 ?? "").trim()];
+        });
+
+        const nodesMap = new Map();
+        const edges = [];
+        let colorIdx = 0;
+
+        function ensureNode(id, type) {
+          if (!id) return;
+          if (!nodesMap.has(id)) {
+            const node = { id, type, color: "#666" };
+            if (type === "left") { node.color = LEFT_PALETTE[colorIdx % LEFT_PALETTE.length]; colorIdx += 1; }
+            nodesMap.set(id, node);
+          }
+        }
+
+        normalized.forEach((pair, i) => {
+          const left = pair[0], right = pair[1];
+          if (!left || !right) return;
+          ensureNode(left,  "left");
+          ensureNode(right, "right");
+          edges.push({ id: `e${i}`, source: left, target: right, left });
+        });
+
+        // Degree counts
+        const degree = new Map();
+        edges.forEach((e) => {
+          degree.set(e.source, (degree.get(e.source) || 0) + 1);
+          degree.set(e.target, (degree.get(e.target) || 0) + 1);
+        });
+        nodesMap.forEach((n) => n.degree = degree.get(n.id) || 0);
+
+        return { nodes: Array.from(nodesMap.values()), edges };
+      }
+
+      // Graph helpers
+      function buildAdjacency(nodes, edges) {
+        const idToIndex = new Map();
+        nodes.forEach((n, i) => idToIndex.set(n.id, i));
+        const adj = Array.from({ length: nodes.length }, () => []);
+        edges.forEach((e) => {
+          const u = idToIndex.get(e.source), v = idToIndex.get(e.target);
+          if (u == null || v == null) return;
+          adj[u].push(v); adj[v].push(u);
+        });
+        return { idToIndex, adj };
+      }
+
+      function connectedComponents(nodes, adj) {
+        const n = nodes.length; const seen = new Array(n).fill(false); const comps = [];
+        for (let i = 0; i < n; i++) {
+          if (seen[i]) continue; const stack = [i]; seen[i] = true; const comp = [];
+          while (stack.length) {
+            const u = stack.pop(); comp.push(u);
+            for (const v of adj[u]) if (!seen[v]) { seen[v] = true; stack.push(v); }
+          }
+          comps.push(comp);
+        }
+        return comps;
+      }
+
+      function allPairsShortestPaths(adj) {
+        const n = adj.length; const dist = Array.from({ length: n }, () => new Array(n).fill(Infinity));
+        for (let s = 0; s < n; s++) {
+          const q = [s]; dist[s][s] = 0; let qi = 0;
+          while (qi < q.length) {
+            const u = q[qi++];
+            for (const v of adj[u]) if (dist[s][v] === Infinity) {
+              dist[s][v] = dist[s][u] + 1;
+              q.push(v);
+            }
+          }
+        }
+        return dist;
+      }
+
+      // Kamada–Kawai on a component, then components are packed in a grid
+      function kamadaKawaiLayout(nodes, edges, comp) {
+        const { adj } = buildAdjacency(nodes, edges);
+        const distAll = allPairsShortestPaths(adj);
+        const idxArr = comp; const m = idxArr.length;
+        const pairs = []; let sumL = 0, cntL = 0;
+        for (let a = 0; a < m; a++) for (let b = a + 1; b < m; b++) {
+          const i = idxArr[a], j = idxArr[b];
+          const d = distAll[i][j];
+          if (!isFinite(d) || d === 0) continue;
+          sumL += d; cntL += 1;
+        }
+        const L0 = cntL ? 1 / (sumL / cntL) : 1;
+        for (let a = 0; a < m; a++) for (let b = a + 1; b < m; b++) {
+          const i = idxArr[a], j = idxArr[b];
+          const d = distAll[i][j];
+          if (!isFinite(d) || d === 0) continue;
+          const lij = L0 * d; const wij = 1 / (d * d);
+          pairs.push([a, b, lij, wij]);
+        }
+        const pos = Array.from({ length: m }, (_, k) => ({
+          x: 0.5 + 0.4 * Math.cos((2 * Math.PI * k) / m),
+          y: 0.5 + 0.4 * Math.sin((2 * Math.PI * k) / m)
+        }));
+        const T = Math.min(600, 100 + 20 * m); let step = 0.02;
+        for (let t = 0; t < T; t++) {
+          const grad = Array.from({ length: m }, () => ({ x: 0, y: 0 }));
+          for (const [a, b, lij, wij] of pairs) {
+            const dx = pos[a].x - pos[b].x, dy = pos[a].y - pos[b].y;
+            const d = Math.hypot(dx, dy) || 1e-6;
+            const coeff = 2 * wij * (1 - lij / d);
+            const gx = coeff * dx, gy = coeff * dy;
+            grad[a].x += gx; grad[a].y += gy;
+            grad[b].x -= gx; grad[b].y -= gy;
+          }
+          for (let a = 0; a < m; a++) {
+            pos[a].x -= step * grad[a].x;
+            pos[a].y -= step * grad[a].y;
+          }
+          if ((t + 1) % 50 === 0) step *= 0.7;
+        }
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (let a = 0; a < m; a++) {
+          minX = Math.min(minX, pos[a].x); maxX = Math.max(maxX, pos[a].x);
+          minY = Math.min(minY, pos[a].y); maxY = Math.max(maxY, pos[a].y);
+        }
+        const scaleX = maxX - minX || 1, scaleY = maxY - minY || 1;
+        const out = {};
+        for (let a = 0; a < m; a++) {
+          const id = nodes[idxArr[a]].id;
+          out[id] = { x: (pos[a].x - minX) / scaleX, y: (pos[a].y - minY) / scaleY };
+        }
+        return out;
+      }
+
+      function forceDirectedLayout(nodes, edges) {
+        const idToNode = new Map(nodes.map((n) => [n.id, { x: Math.random(), y: Math.random() }]));
+        const sim = d3.forceSimulation(
+            nodes.map((n) => ({ id: n.id, x: idToNode.get(n.id).x * 500, y: idToNode.get(n.id).y * 500 }))
+          )
+          .force("link", d3.forceLink(edges.map((e) => ({ source: e.source, target: e.target })))
+            .id((d) => d.id).distance(50).strength(0.8))
+          .force("charge", d3.forceManyBody().strength(-200))
+          .force("center", d3.forceCenter(250, 250))
+          .force("collision", d3.forceCollide().radius((d) => 10))
+          .stop();
+        sim.tick(200);
+        const out = {};
+        (sim.nodes()).forEach((n) => {
+          out[n.id] = { x: (n.x || 0) / 500, y: (n.y || 0) / 500 };
+        });
+        return out;
+      }
+
+      function circularLayout(nodes) {
+        const n = nodes.length; const out = {};
+        nodes.forEach((node, i) => {
+          out[node.id] = {
+            x: 0.5 + 0.45 * Math.cos((2 * Math.PI * i) / n),
+            y: 0.5 + 0.45 * Math.sin((2 * Math.PI * i) / n)
+          };
+        });
+        return out;
+      }
+
+      function bipartiteLayout(nodes) {
+        const left = nodes.filter((n) => n.type === "left");
+        const right = nodes.filter((n) => n.type === "right");
+        const out = {};
+        left.forEach((n, i) => {
+          out[n.id] = { x: 0.2, y: 0.1 + (0.8 * i) / Math.max(1, left.length - 1) };
+        });
+        right.forEach((n, i) => {
+          out[n.id] = { x: 0.8, y: 0.1 + (0.8 * i) / Math.max(1, right.length - 1) };
+        });
+        return out;
+      }
+
+      // Extra layouts
+      function randomLayout(nodes) {
+        const out = {};
+        nodes.forEach((n) => { out[n.id] = { x: Math.random(), y: Math.random() }; });
+        return out;
+      }
+
+      function spiralLayout(nodes) {
+        const out = {};
+        const n = nodes.length || 1;
+        const turns = 3;
+        nodes.forEach((node, i) => {
+          const t = i / Math.max(1, n - 1);
+          const angle = 2 * Math.PI * turns * t;
+          const r = 0.1 + 0.35 * t;
+          out[node.id] = { x: 0.5 + r * Math.cos(angle), y: 0.5 + r * Math.sin(angle) };
+        });
+        return out;
+      }
+
+      function gridLayout(nodes) {
+        const out = {};
+        const n = nodes.length || 1;
+        const cols = Math.ceil(Math.sqrt(n));
+        const rows = Math.ceil(n / cols);
+        nodes.forEach((node, i) => {
+          const r = Math.floor(i / cols);
+          const c = i % cols;
+          const x = (c + 0.5) / cols;
+          const y = (r + 0.5) / rows;
+          out[node.id] = { x, y };
+        });
+        return out;
+      }
+
+      function twoRingLayout(nodes) {
+        const left = nodes.filter((n) => n.type === "left");
+        const right = nodes.filter((n) => n.type === "right");
+        const out = {};
+        const rl = 0.25, rr = 0.45;
+        left.forEach((n, i) => {
+          const angle = (2 * Math.PI * i) / Math.max(1, left.length);
+          out[n.id] = { x: 0.5 + rl * Math.cos(angle), y: 0.5 + rl * Math.sin(angle) };
+        });
+        right.forEach((n, i) => {
+          const angle = (2 * Math.PI * i) / Math.max(1, right.length);
+          out[n.id] = { x: 0.5 + rr * Math.cos(angle), y: 0.5 + rr * Math.sin(angle) };
+        });
+        return out;
+      }
+
+      // Order LEFT around the ring by shared-right overlap
+      function leftOverlapOrdering(nodes, edges) {
+        const lefts = nodes.filter(n => n.type === "left").map(p => p.id);
+        const rightSetByLeft = new Map(lefts.map(pid => [pid, new Set()]));
+        edges.forEach(e => {
+          if (rightSetByLeft.has(e.source)) rightSetByLeft.get(e.source).add(e.target);
+        });
+
+        function overlap(a, b) {
+          const A = rightSetByLeft.get(a) || new Set();
+          const B = rightSetByLeft.get(b) || new Set();
+          let cnt = 0; for (const c of A) if (B.has(c)) cnt += 1;
+          return cnt;
+        }
+
+        const remaining = new Set(lefts);
+        const order = [];
+
+        while (remaining.size) {
+          let pick = null;
+
+          if (order.length === 0) {
+            pick = Array.from(remaining).sort((a, b) => {
+              const da = (rightSetByLeft.get(a) || new Set()).size;
+              const db = (rightSetByLeft.get(b) || new Set()).size;
+              if (db !== da) return db - da;
+              return a.localeCompare(b);
+            })[0];
+          } else {
+            const last = order[order.length - 1];
+            let best = null, bestScore = -1, bestDeg = -1;
+            for (const p of remaining) {
+              const s = overlap(last, p);
+              const deg = (rightSetByLeft.get(p) || new Set()).size;
+              if (s > bestScore || (s === bestScore && deg > bestDeg) || (s === bestScore && deg === bestDeg && p.localeCompare(best || "") < 0)) {
+                best = p; bestScore = s; bestDeg = deg;
+              }
+            }
+            if (bestScore === 0) {
+              best = Array.from(remaining).sort((a, b) => {
+                const da = (rightSetByLeft.get(a) || new Set()).size;
+                const db = (rightSetByLeft.get(b) || new Set()).size;
+                if (db !== da) return db - da;
+                return a.localeCompare(b);
+              })[0];
+            }
+            pick = best;
+          }
+
+          order.push(pick);
+          remaining.delete(pick);
+        }
+
+        return order;
+      }
+
+      // LEFT on outer ring, RIGHT inside with force-directed placement
+      function ringInnerForceLayout(nodes, edges) {
+        const width = 500, height = 500;
+        const cx = width / 2, cy = height / 2;
+        const R = Math.min(width, height) * 0.42;
+        const innerR = R - 40;
+
+        const left = nodes.filter((n) => n.type === "left");
+        const right = nodes.filter((n) => n.type === "right");
+
+        const orderedLeftIds = leftOverlapOrdering(nodes, edges);
+        const leftOrder = new Map(orderedLeftIds.map((pid, i) => [pid, i]));
+
+        const leftCount = Math.max(1, left.length);
+
+        const simNodes = nodes.map((n) => {
+          if (n.type === "left") {
+            const idx = leftOrder.get(n.id) ?? 0;
+            const angle = (2 * Math.PI * idx) / leftCount;
+            const x = cx + R * Math.cos(angle);
+            const y = cy + R * Math.sin(angle);
+            return { id: n.id, x, y, fx: x, fy: y };
+          } else {
+            return {
+              id: n.id,
+              x: cx + (Math.random() * 2 - 1) * innerR * 0.6,
+              y: cy + (Math.random() * 2 - 1) * innerR * 0.6
+            };
+          }
+        });
+
+        const links = edges.map((e) => ({ source: e.source, target: e.target }));
+
+        const sim = d3.forceSimulation(simNodes)
+          .force("link", d3.forceLink(links).id((d) => d.id).distance(40).strength(0.7))
+          .force("charge", d3.forceManyBody().strength(-70))
+          .force("center", d3.forceCenter(cx, cy))
+          .force("collision", d3.forceCollide().radius((d) => 10))
+          .stop();
+
+        sim.tick(320);
+
+        // Keep RIGHT nodes inside inner circle
+        simNodes.forEach((n) => {
+          if (n.fx != null && n.fy != null) return;
+          const dx = n.x - cx, dy = n.y - cy;
+          const dist = Math.hypot(dx, dy) || 1e-6;
+          if (dist > innerR) {
+            const s = innerR / dist;
+            n.x = cx + dx * s;
+            n.y = cy + dy * s;
+          }
+        });
+
+        const out = {};
+        simNodes.forEach((n) => { out[n.id] = { x: n.x / width, y: n.y / height }; });
+        return out;
+      }
+
+      function computePositions(nodes, edges, layout) {
+        if (layout === "Circular") return circularLayout(nodes);
+        if (layout === "Force-Directed") return forceDirectedLayout(nodes, edges);
+        if (layout === "Bipartite") return bipartiteLayout(nodes);
+        if (layout === "Random") return randomLayout(nodes);
+        if (layout === "Spiral") return spiralLayout(nodes);
+        if (layout === "Grid") return gridLayout(nodes);
+        if (layout === "Two-Ring") return twoRingLayout(nodes);
+        if (layout === "Ring + Inner Force") return ringInnerForceLayout(nodes, edges);
+
+        // Default, Kamada–Kawai with component packing
+        const { adj } = buildAdjacency(nodes, edges); const comps = connectedComponents(nodes, adj);
+        const perComp = []; const positions = {};
+        for (const comp of comps) {
+          const kk = kamadaKawaiLayout(nodes, edges, comp);
+          const pts = comp.map((idx) => ({ id: nodes[idx].id, x: kk[nodes[idx].id].x, y: kk[nodes[idx].id].y }));
+          perComp.push(pts);
+        }
+        const cols = Math.ceil(Math.sqrt(perComp.length));
+        perComp.forEach((pts, i) => {
+          const gx = i % cols, gy = Math.floor(i / cols);
+          const offsetX = (gx + 0.5) / cols, offsetY = (gy + 0.5) / cols;
+          const scale = 0.8 / cols;
+          pts.forEach((p) => {
+            positions[p.id] = { x: offsetX + scale * (p.x - 0.5), y: offsetY + scale * (p.y - 0.5) };
+          });
+        });
+        return positions;
+      }
+
+      // Node size scaling
+      function radiusForNode(n, maxDegree, maxNodeSize) {
+        const minR = 6;
+        const deg = n.degree || 0;
+        const t = Math.pow(deg / Math.max(1, maxDegree), 1.5);
+        return minR + (maxNodeSize - minR) * t;
+      }
+
+      function download(filename, href) {
+        const a = document.createElement("a"); a.href = href; a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      }
+
+      function exportSVG(svgRef, backgroundColor = "white") {
+        const svg = svgRef.current; if (!svg) return;
+        const serializer = new XMLSerializer();
+        const copy = svg.cloneNode(true);
+        const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        bg.setAttribute("x", "0"); bg.setAttribute("y", "0");
+        bg.setAttribute("width", String(svg.clientWidth));
+        bg.setAttribute("height", String(svg.clientHeight));
+        bg.setAttribute("fill", backgroundColor);
+        copy.insertBefore(bg, copy.firstChild);
+        const str = serializer.serializeToString(copy);
+        const blob = new Blob([str], { type: "image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        download("network.svg", url); URL.revokeObjectURL(url);
+      }
+
+      async function exportPNG(svgRef, backgroundColor = "white") {
+        const svg = svgRef.current; if (!svg) return;
+        const serializer = new XMLSerializer();
+        const copy = svg.cloneNode(true);
+        const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        bg.setAttribute("x", "0"); bg.setAttribute("y", "0");
+        bg.setAttribute("width", String(svg.clientWidth));
+        bg.setAttribute("height", String(svg.clientHeight));
+        bg.setAttribute("fill", backgroundColor);
+        copy.insertBefore(bg, copy.firstChild);
+        const str = serializer.serializeToString(copy);
+        const svgBlob = new Blob([str], { type: "image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(svgBlob);
+        const img = new Image();
+        const canvas = document.createElement("canvas");
+        canvas.width = svg.clientWidth; canvas.height = svg.clientHeight;
+        const ctx = canvas.getContext("2d");
+        await new Promise((resolve) => { img.onload = () => resolve(); img.src = url; });
+        ctx.fillStyle = backgroundColor; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+        download("network.png", canvas.toDataURL("image/png"));
+      }
+
+      // --- New: pixel-space collision resolution to prevent overlap across all layouts ---
+      function resolveCollisionsScreen(positions, nodes, size, margin, maxNodeSize, maxDegree, padding = 2, iterations = 3) {
+        // Work in pixel space because radii are in pixels.
+        function toScreen(p) {
+          return {
+            x: margin + (p.x || 0.5) * (size.width - 2 * margin),
+            y: margin + (p.y || 0.5) * (size.height - 2 * margin)
+          };
+        }
+        function clampToBounds(p) {
+          p.x = Math.max(margin, Math.min(size.width - margin, p.x));
+          p.y = Math.max(margin, Math.min(size.height - margin, p.y));
+        }
+
+        // Build working array
+        const work = nodes.map((n) => {
+          const base = positions[n.id] || { x: 0.5, y: 0.5 };
+          const s = toScreen(base);
+          const r = radiusForNode(n, maxDegree, maxNodeSize);
+          return { id: n.id, x: s.x, y: s.y, r: r + padding };
+        });
+
+        for (let it = 0; it < iterations; it++) {
+          // Quadtree based pairwise resolution
+          const qtree = d3.quadtree(work, d => d.x, d => d.y);
+          work.forEach((a) => {
+            qtree.visit((node, x0, y0, x1, y1) => {
+              const { data } = node;
+              if (data && data !== a) {
+                const b = data;
+                let dx = a.x - b.x;
+                let dy = a.y - b.y;
+                let dist = Math.hypot(dx, dy) || 1e-6;
+                const minDist = a.r + b.r;
+                if (dist < minDist) {
+                  const overlap = (minDist - dist) / 2;
+                  dx /= dist; dy /= dist;
+                  a.x += dx * overlap; a.y += dy * overlap;
+                  b.x -= dx * overlap; b.y -= dy * overlap;
+                  clampToBounds(a); clampToBounds(b);
+                }
+              }
+              // Prune traversal if the region is far from a
+              const ax = a.x, ay = a.y, ar = a.r + 50; // generous
+              return x0 > ax + ar || x1 < ax - ar || y0 > ay + ar || y1 < ay - ar;
+            });
+          });
+
+          // Keep inside bounds after each iteration
+          work.forEach(clampToBounds);
+        }
+
+        // Convert back to normalized space
+        const out = {};
+        work.forEach((d) => {
+          out[d.id] = {
+            x: (d.x - margin) / Math.max(1, size.width - 2 * margin),
+            y: (d.y - margin) / Math.max(1, size.height - 2 * margin)
+          };
+        });
+        return out;
+      }
+
+      function App() {
+        const [rows, setRows] = useState([]);
+        const [nodes, setNodes] = useState([]);
+        const [edges, setEdges] = useState([]);
+        const [layoutName, setLayoutName] = useState("Ring + Inner Force");
+        const [positions, setPositions] = useState({});
+        const [showLabels, setShowLabels] = useState(true);
+        const [labelLeftSet, setLabelLeftSet] = useState(new Set());
+        const [selectedNode, setSelectedNode] = useState(null);
+        const [search, setSearch] = useState("");
+        const [fixed, setFixed] = useState(new Set());
+        const [maxNodeSize, setMaxNodeSize] = useState(36);
+        const [darkBg, setDarkBg] = useState(false);
+
+        // New controls
+        const [leftLabelSize, setLeftLabelSize] = useState(18);
+        const [rightLabelSize, setRightLabelSize] = useState(12);
+        const [leftNodeOpacity, setLeftNodeOpacity] = useState(0.65);
+        const [rightNodeOpacity, setRightNodeOpacity] = useState(0.65);
+
+        // New: overlap prevention controls
+        const [avoidOverlap, setAvoidOverlap] = useState(true);
+        const [collisionPadding, setCollisionPadding] = useState(2);
+        const [collisionIterations, setCollisionIterations] = useState(3);
+
+        const svgRef = useRef(null); const zoomRef = useRef(null); const gRef = useRef(null);
+        const containerRef = useRef(null); const [size, setSize] = useState({ width: 800, height: 600 });
+
+        const dragRafLocked = useRef(false);
+
+        useEffect(() => {
+          if (!rows.length) return;
+          const { nodes, edges } = buildGraph(rows);
+          setNodes(nodes); setEdges(edges);
+        }, [rows]);
+
+        const margin = 24;
+
+        // Compute positions for the chosen layout, then optionally resolve collisions in pixel space
+        useEffect(() => {
+          if (!nodes.length) return;
+          // 1) Compute base positions from layout
+          const base = computePositions(nodes, edges, layoutName);
+
+          // 2) Respect any fixed nodes
+          const merged = { ...base };
+          for (const id of fixed) if (positions[id]) merged[id] = positions[id];
+
+          // 3) Optional no-overlap pass (pixel space)
+          if (avoidOverlap) {
+            const maxDegree = nodes.length ? Math.max(...nodes.map(n => n.degree || 0)) : 1;
+            const resolved = resolveCollisionsScreen(
+              merged,
+              nodes,
+              size,
+              margin,
+              maxNodeSize,
+              maxDegree,
+              collisionPadding,
+              collisionIterations
+            );
+            setPositions(resolved);
+          } else {
+            setPositions(merged);
+          }
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [nodes, edges, layoutName, avoidOverlap, collisionPadding, collisionIterations, size.width, size.height, maxNodeSize]);
+
+        useEffect(() => {
+          const el = containerRef.current; if (!el) return;
+          const ro = new ResizeObserver(() => {
+            setSize({ width: el.clientWidth, height: el.clientHeight });
+          });
+          ro.observe(el); return () => ro.disconnect();
+        }, []);
+
+        useEffect(() => {
+          const svg = svgRef.current; const g = gRef.current; if (!svg || !g) return;
+          const zoomed = (event) => {
+            const { transform } = event; g.setAttribute("transform", transform.toString());
+          };
+          const zoom = d3.zoom().scaleExtent([0.2, 10]).on("zoom", zoomed);
+          d3.select(svg).call(zoom); zoomRef.current = zoom;
+        }, []);
+
+        const idToNode = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+        const leftList = useMemo(
+          () => nodes.filter((n) => n.type === "left").map((n) => n.id).sort(),
+          [nodes]
+        );
+        const toScreen = (p) => ({
+          x: margin + (p.x || 0.5) * (size.width - 2 * margin),
+          y: margin + (p.y || 0.5) * (size.height - 2 * margin)
+        });
+
+        const neighbors = useMemo(() => {
+          const map = new Map(); nodes.forEach((n) => map.set(n.id, new Set()));
+          edges.forEach((e) => { map.get(e.source).add(e.target); map.get(e.target).add(e.source); });
+          return map;
+        }, [nodes, edges]);
+
+        const isEdgeActive = (e) => !selectedNode || e.source === selectedNode || e.target === selectedNode;
+        const isNodeDimmed = (id) => selectedNode && !(id === selectedNode || neighbors.get(selectedNode).has(id));
+        const handleBackgroundClick = () => setSelectedNode(null);
+
+        // Drag behavior, with optional post-drag de-overlap
+        useEffect(() => {
+          const svg = svgRef.current; if (!svg) return;
+          const selection = d3.select(svg).selectAll("g.node-group");
+
+          const drag = d3.drag()
+            .on("start", function(event) {
+              event.sourceEvent?.stopPropagation?.();
+              const group = event.sourceEvent?.target?.closest?.("g.node-group");
+              const id = group?.getAttribute ? group.getAttribute("data-id") : null;
+              if (!id) return;
+              setSelectedNode(id);
+              setFixed((prev) => new Set([...prev, id]));
+            })
+            .on("drag", function(event) {
+              const svg = svgRef.current; if (!svg) return;
+              const group = event.sourceEvent?.target?.closest?.("g.node-group");
+              const id = group?.getAttribute ? group.getAttribute("data-id") : null;
+              if (!id) return;
+
+              if (dragRafLocked.current) return;
+              dragRafLocked.current = true;
+
+              requestAnimationFrame(() => {
+                const z = d3.zoomTransform(svg);
+                const pt = z.invert([event.x, event.y]);
+                const ux = pt[0], uy = pt[1];
+                const px = (ux - margin) / Math.max(1, size.width - 2 * margin);
+                const py = (uy - margin) / Math.max(1, size.height - 2 * margin);
+                setPositions((prev) => ({
+                  ...prev,
+                  [id]: {
+                    x: Math.max(0, Math.min(1, px)),
+                    y: Math.max(0, Math.min(1, py))
+                  }
+                }));
+                dragRafLocked.current = false;
+              });
+            })
+            .on("end", function(event) {
+              const group = event.sourceEvent?.target?.closest?.("g.node-group");
+              const id = group?.getAttribute ? group.getAttribute("data-id") : null;
+              if (!id) return;
+              setFixed((prev) => new Set([...prev, id]));
+              if (avoidOverlap) {
+                // Run a quick, localized collision pass after drag end
+                const maxDegree = nodes.length ? Math.max(...nodes.map(n => n.degree || 0)) : 1;
+                setPositions((prev) => resolveCollisionsScreen(prev, nodes, size, margin, maxNodeSize, maxDegree, collisionPadding, Math.max(1, Math.min(2, collisionIterations))));
+              }
+            });
+
+          selection.call(drag);
+        }, [nodes.length, size.width, size.height, avoidOverlap, collisionPadding, collisionIterations, maxNodeSize]);
+
+        function runSearch() {
+          const q = search.trim().toLowerCase(); if (!q) return;
+          const match = nodes.find((n) => n.id.toLowerCase().includes(q)); if (!match) return;
+          setSelectedNode(match.id);
+          const svg = svgRef.current;
+          const p = toScreen(positions[match.id] || { x: 0.5, y: 0.5 });
+          const current = d3.zoomTransform(svg); const k = current.k || 1;
+          const tx = size.width / 2 - k * p.x; const ty = size.height / 2 - k * p.y;
+          d3.select(svg).transition().duration(500)
+            .call(zoomRef.current.transform, d3.zoomIdentity.translate(tx, ty).scale(k));
+        }
+
+        function parseTwoColumnCSV(file) {
+          return new Promise((resolve) => {
+            Papa.parse(file, {
+              header: true, skipEmptyLines: true, dynamicTyping: false,
+              complete: (res) => {
+                const data = (res.data || []).filter(Boolean);
+                if (!data.length) return resolve([]);
+                const keys = Object.keys(data[0] || {});
+                if (keys.length >= 2) {
+                  const k1 = keys[0], k2 = keys[1];
+                  const projected = data.map(row => ({ [k1]: row[k1], [k2]: row[k2] }));
+                  return resolve(projected);
+                }
+                Papa.parse(file, {
+                  header: false, skipEmptyLines: true,
+                  complete: (res2) => {
+                    const raw = (res2.data || []).filter(r => r && r.length >= 2);
+                    const mapped = raw.map(r => ({ col1: r[0], col2: r[1] }));
+                    resolve(mapped);
+                  }
+                });
+              }
+            });
+          });
+        }
+
+        async function onFileSelected(file) {
+          const data = await parseTwoColumnCSV(file);
+          setRows(data);
+        }
+
+        function resetView() {
+          const svg = svgRef.current; if (!svg) return;
+          d3.select(svg).transition().duration(400).call(zoomRef.current.transform, d3.zoomIdentity);
+          setSelectedNode(null);
+        }
+        function resetPositions() {
+          setFixed(new Set());
+          const base = computePositions(nodes, edges, layoutName);
+          if (avoidOverlap) {
+            const maxDegree = nodes.length ? Math.max(...nodes.map(n => n.degree || 0)) : 1;
+            setPositions(resolveCollisionsScreen(base, nodes, size, margin, maxNodeSize, maxDegree, collisionPadding, collisionIterations));
+          } else {
+            setPositions(base);
+          }
+        }
+        function edgePath(e) {
+          const a = toScreen(positions[e.source] || { x: 0.5, y: 0.5 });
+          const b = toScreen(positions[e.target] || { x: 0.5, y: 0.5 });
+          return `M${a.x},${a.y} L${b.x},${b.y}`;
+        }
+        function showLabelFor(id) {
+          if (!showLabels) return false;
+          if (labelLeftSet.size === 0) return true;
+          const n = idToNode.get(id);
+          if (n.type === "left") return labelLeftSet.has(n.id);
+          const inc = edges.filter((e) => e.target === id || e.source === id).map((e) => e.left);
+          return inc.some((p) => labelLeftSet.has(p));
+        }
+
+        const maxDegree = useMemo(
+          () => (nodes.length ? Math.max(...nodes.map(n => n.degree || 0)) : 1),
+          [nodes]
+        );
+
+        const drawableEdges = edges; const drawableNodes = nodes;
+
+        // Reset visual-control defaults
+        function resetVisualDefaults() {
+          setLeftLabelSize(18);
+          setRightLabelSize(12);
+          setLeftNodeOpacity(0.65);
+          setRightNodeOpacity(0.65);
+        }
+
+        return (
+          <div className={`w-full h-screen ${darkBg ? 'bg-black text-gray-100' : 'bg-white text-gray-900'} flex`}>
+            {/* Sidebar Controls */}
+            <div className={`w-80 flex-shrink-0 ${darkBg ? 'border-gray-800' : 'border-gray-200'} border-r p-4 space-y-4 overflow-y-auto`}>
+              <h1 className="text-xl font-semibold">Bipartite Network Builder</h1>
+              <p className={`text-sm ${darkBg ? 'text-gray-400' : 'text-gray-600'}`}>Upload a CSV with exactly two columns. The first column is the LEFT side, the second column is the RIGHT side.</p>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Load data (CSV)</label>
+                <input type="file" accept=".csv" onChange={(e) => e.target.files && onFileSelected(e.target.files[0])} className="block w-full text-sm" />
+                <div className={`mt-2 text-xs ${darkBg ? 'text-gray-400' : 'text-gray-500'}`}>{rows.length ? `${rows.length} rows loaded` : `No data loaded yet`}</div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-sm font-medium">Layout</label>
+                <select value={layoutName} onChange={(e) => setLayoutName(e.target.value)} className="w-full border rounded-md px-2 py-1">
+                  <option>Ring + Inner Force</option>
+                  <option>Kamada–Kawai</option>
+                  <option>Force-Directed</option>
+                  <option>Circular</option>
+                  <option>Bipartite</option>
+                  <option>Two-Ring</option>
+                  <option>Grid</option>
+                  <option>Spiral</option>
+                  <option>Random</option>
+                </select>
+                <div className="flex gap-2 pt-2">
+                  <button className="px-3 py-1.5 bg-gray-900 text-white rounded-md" onClick={resetPositions}>Reset positions</button>
+                  <button className={`px-3 py-1.5 rounded-md ${darkBg ? 'bg-gray-800 text-white' : 'bg-gray-100'}`} onClick={resetView}>Reset view</button>
+                </div>
+              </div>
+
+              {/* Background theme toggle */}
+              <div className="space-y-2">
+                <label className="inline-flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={darkBg} onChange={(e) => setDarkBg(e.target.checked)} />
+                  Black background (labels switch to white)
+                </label>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-sm font-medium">Max node size</label>
+                <input
+                  type="number"
+                  min={12}
+                  max={72}
+                  step={1}
+                  value={maxNodeSize}
+                  onChange={(e) => setMaxNodeSize(Number(e.target.value) || 36)}
+                  className="w-full border rounded-md px-2 py-1"
+                />
+                <p className={`text-xs ${darkBg ? 'text-gray-400' : 'text-gray-500'}`}>Sets radius cap for highest degree node, default 36.</p>
+              </div>
+
+              {/* Label Size Controls */}
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Label sizes</div>
+                <div className="ctrl-row">
+                  <label className="text-sm">Left labels</label>
+                  <span className={`text-xs ${darkBg ? 'text-gray-400' : 'text-gray-600'}`}>{leftLabelSize}px</span>
+                </div>
+                <input type="range" min="8" max="36" step="1" value={leftLabelSize} onChange={(e) => setLeftLabelSize(parseInt(e.target.value)||18)} />
+                <div className="ctrl-row">
+                  <label className="text-sm">Right labels</label>
+                  <span className={`text-xs ${darkBg ? 'text-gray-400' : 'text-gray-600'}`}>{rightLabelSize}px</span>
+                </div>
+                <input type="range" min="8" max="36" step="1" value={rightLabelSize} onChange={(e) => setRightLabelSize(parseInt(e.target.value)||12)} />
+              </div>
+
+              {/* Node Opacity Controls */}
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Node transparency</div>
+                <div className="ctrl-row">
+                  <label className="text-sm">Left node opacity</label>
+                  <span className={`text-xs ${darkBg ? 'text-gray-400' : 'text-gray-600'}`}>{leftNodeOpacity.toFixed(2)}</span>
+                </div>
+                <input type="range" min="0.1" max="1" step="0.05" value={leftNodeOpacity} onChange={(e) => setLeftNodeOpacity(parseFloat(e.target.value)||0.65)} />
+                <div className="ctrl-row">
+                  <label className="text-sm">Right node opacity</label>
+                  <span className={`text-xs ${darkBg ? 'text-gray-400' : 'text-gray-600'}`}>{rightNodeOpacity.toFixed(2)}</span>
+                </div>
+                <input type="range" min="0.1" max="1" step="0.05" value={rightNodeOpacity} onChange={(e) => setRightNodeOpacity(parseFloat(e.target.value)||0.65)} />
+                <button className="mt-2 px-3 py-1.5 rounded-md bg-gray-100 hover:bg-gray-200 text-sm" onClick={resetVisualDefaults}>Reset label/opacity</button>
+              </div>
+
+              {/* No-overlap controls */}
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Prevent node overlap</div>
+                <label className="inline-flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={avoidOverlap} onChange={(e) => setAvoidOverlap(e.target.checked)} />
+                  Enable collision resolution
+                </label>
+                <div className="ctrl-row">
+                  <label className="text-sm">Padding</label>
+                  <span className={`text-xs ${darkBg ? 'text-gray-400' : 'text-gray-600'}`}>{collisionPadding}px</span>
+                </div>
+                <input type="range" min="0" max="12" step="1" value={collisionPadding} onChange={(e) => setCollisionPadding(parseInt(e.target.value)||2)} />
+                <div className="ctrl-row">
+                  <label className="text-sm">Iterations</label>
+                  <span className={`text-xs ${darkBg ? 'text-gray-400' : 'text-gray-600'}`}>{collisionIterations}</span>
+                </div>
+                <input type="range" min="1" max="8" step="1" value={collisionIterations} onChange={(e) => setCollisionIterations(parseInt(e.target.value)||3)} />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium">Search node</label>
+                <div className="flex gap-2">
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && runSearch()}
+                    placeholder="Type any node label"
+                    className="border rounded-md px-2 py-1 flex-1"
+                  />
+                  <button onClick={runSearch} className="px-3 py-1.5 bg-blue-600 text-white rounded-md">Go</button>
+                </div>
+                <p className={`text-xs ${darkBg ? 'text-gray-400' : 'text-gray-600'}`}>When a node is selected, only its incident edges keep their color, others turn gray. Click empty space to clear.</p>
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Export view</div>
+                <div className="flex gap-2">
+                  <button onClick={() => exportPNG(svgRef, darkBg ? "black" : "white")} className="px-3 py-1.5 bg-green-600 text-white rounded-md">PNG</button>
+                  <button onClick={() => exportSVG(svgRef, darkBg ? "black" : "white")} className="px-3 py-1.5 bg-gray-900 text-white rounded-md">SVG</button>
+                </div>
+              </div>
+
+              <div className={`pt-2 text-xs ${darkBg ? 'text-gray-400' : 'text-gray-500'}`}>
+                <p>Drag nodes to reposition, they will stick until you reset positions. Scroll or pinch to zoom, drag to pan.</p>
+              </div>
+            </div>
+
+            {/* Graph Canvas */}
+            <div className="flex-1" ref={containerRef}>
+              <svg
+                ref={svgRef}
+                width={size.width}
+                height={size.height}
+                className={darkBg ? 'bg-black' : 'bg-white'}
+                onClick={(e) => { if (e.target === e.currentTarget) handleBackgroundClick(); }}
+              >
+                <g ref={gRef}>
+                  {/* Edges */}
+                  {drawableEdges.map((e) => {
+                    const leftColor = idToNode.get(e.left)?.color || (darkBg ? "#888" : "#999");
+                    const stroke = isEdgeActive(e) ? leftColor : (darkBg ? "#555" : "#ccc");
+                    const sw = isEdgeActive(e) ? 1.8 : 1.4;
+                    const op = isEdgeActive(e) ? (darkBg ? 0.95 : 0.9) : (darkBg ? 0.55 : 0.6);
+                    return (<path key={e.id} d={edgePath(e)} stroke={stroke} strokeWidth={sw} fill="none" opacity={op} />);
+                  })}
+
+                  {/* Nodes */}
+                  {drawableNodes.map((n) => {
+                    const p = toScreen(positions[n.id] || { x: 0.5, y: 0.5 });
+                    const r = radiusForNode(n, maxDegree, maxNodeSize);
+                    const baseFill = n.type === "left" ? (n.color || (darkBg ? "#dddddd" : "#000000")) : (darkBg ? "#bbbbbb" : "#666666");
+                    const stroke = selectedNode === n.id ? (darkBg ? "#ffffff" : "#111111") : (darkBg ? "#222222" : "#ffffff");
+                    const dimmed = isNodeDimmed(n.id);
+                    const baseOpacity = n.type === "left" ? leftNodeOpacity : rightNodeOpacity;
+                    const fillOpacity = dimmed ? Math.max(0.1, baseOpacity * 0.4) : baseOpacity; // semi-transparent and dim on selection
+                    const labelFill = darkBg ? "#ffffff" : "#111111";
+                    return (
+                      <g
+                        className="node-group"
+                        data-id={n.id}
+                        key={n.id}
+                        transform={`translate(${p.x},${p.y})`}
+                        style={{ cursor: "pointer" }}
+                        onClick={(ev) => { ev.stopPropagation(); setSelectedNode(n.id); }}
+                      >
+                        <circle
+                          className="node"
+                          data-id={n.id}
+                          r={r}
+                          fill={baseFill}
+                          stroke={stroke}
+                          strokeWidth={1.5}
+                          fillOpacity={fillOpacity}
+                        />
+                        {showLabelFor(n.id) && (
+                          n.type === "left" ? (
+                            // LEFT labels: centered over node, larger (configurable)
+                            <text
+                              x={0}
+                              y={0}
+                              textAnchor="middle"
+                              dominantBaseline="middle"
+                              fontSize={leftLabelSize}
+                              fontWeight={700}
+                              fill={labelFill}
+                              className="select-none"
+                              style={{ pointerEvents: "none" }}
+                            >
+                              {n.id}
+                            </text>
+                          ) : (
+                            // RIGHT labels: in Bipartite, draw to the right; otherwise above node
+                            layoutName === "Bipartite" ? (
+                              <text
+                                x={r + 4}
+                                y={4}
+                                textAnchor="start"
+                                fontSize={rightLabelSize}
+                                fontWeight={400}
+                                fill={labelFill}
+                                className="select-none"
+                                style={{ pointerEvents: "none" }}
+                              >
+                                {n.id}
+                              </text>
+                            ) : (
+                              <text
+                                x={0}
+                                y={-(r + 6)}
+                                textAnchor="middle"
+                                fontSize={rightLabelSize}
+                                fontWeight={400}
+                                fill={labelFill}
+                                className="select-none"
+                                style={{ pointerEvents: "none" }}
+                              >
+                                {n.id}
+                              </text>
+                            )
+                          )
+                        )}
+                      </g>
+                    );
+                  })}
+                </g>
+              </svg>
+            </div>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
