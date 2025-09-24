@@ -166,58 +166,98 @@
             return { nodes: Array.from(nodesMap.values()), edges };
         }
 
-        // Ring + Inner Force layout
-        function ringInnerForceLayout(nodes, edges, size) {
+        // Ring + Inner Force layout with better collision detection
+        function ringInnerForceLayout(nodes, edges, size, maxNodeSize) {
             const width = size.width;
             const height = size.height;
             const cx = width / 2;
             const cy = height / 2;
-            const R = Math.min(width, height) * 0.35; // Reduced to fit better
-            const innerR = R - 50;
+            // Use more of the available space
+            const R = Math.min(width, height) * 0.45;
+            const innerR = R - 80;
 
             const research = nodes.filter(n => n.type === "research");
             const faculty = nodes.filter(n => n.type === "faculty");
+            
+            // Calculate actual node radii for collision detection
+            const maxDegree = nodes.length ? Math.max(...nodes.map(n => n.degree || 0)) : 1;
+            const nodeRadii = new Map();
+            nodes.forEach(n => {
+                const minR = 6;
+                const deg = n.degree || 0;
+                const t = Math.pow(deg / Math.max(1, maxDegree), 1.5);
+                const radius = minR + (maxNodeSize - minR) * t;
+                nodeRadii.set(n.id, radius);
+            });
 
-            // Position research nodes on outer ring
+            // Position research nodes on outer ring with spacing
             const simNodes = nodes.map(n => {
                 if (n.type === "research") {
                     const idx = research.indexOf(n);
                     const angle = (2 * Math.PI * idx) / Math.max(1, research.length);
                     const x = cx + R * Math.cos(angle);
                     const y = cy + R * Math.sin(angle);
-                    return { id: n.id, x, y, fx: x, fy: y };
+                    return { 
+                        id: n.id, 
+                        x, 
+                        y, 
+                        fx: x, 
+                        fy: y,
+                        r: nodeRadii.get(n.id)
+                    };
                 } else {
+                    // Start faculty nodes more spread out
+                    const angle = Math.random() * 2 * Math.PI;
+                    const radius = Math.random() * innerR * 0.7;
                     return {
                         id: n.id,
-                        x: cx + (Math.random() * 2 - 1) * innerR * 0.5,
-                        y: cy + (Math.random() * 2 - 1) * innerR * 0.5
+                        x: cx + radius * Math.cos(angle),
+                        y: cy + radius * Math.sin(angle),
+                        r: nodeRadii.get(n.id)
                     };
                 }
             });
 
             const links = edges.map(e => ({ source: e.source, target: e.target }));
 
+            // Enhanced force simulation with proper collision detection
             const sim = d3.forceSimulation(simNodes)
-                .force("link", d3.forceLink(links).id(d => d.id).distance(30).strength(0.5))
-                .force("charge", d3.forceManyBody().strength(-50))
-                .force("center", d3.forceCenter(cx, cy))
-                .force("collision", d3.forceCollide().radius(d => 8))
+                .force("link", d3.forceLink(links)
+                    .id(d => d.id)
+                    .distance(d => {
+                        const sourceR = nodeRadii.get(d.source.id) || 10;
+                        const targetR = nodeRadii.get(d.target.id) || 10;
+                        return sourceR + targetR + 20;
+                    })
+                    .strength(0.3))
+                .force("charge", d3.forceManyBody()
+                    .strength(-300)
+                    .distanceMax(innerR))
+                .force("center", d3.forceCenter(cx, cy).strength(0.05))
+                .force("collision", d3.forceCollide()
+                    .radius(d => d.r + 5)
+                    .strength(0.8)
+                    .iterations(3))
                 .stop();
 
-            sim.tick(320);
-
-            // Keep faculty nodes inside inner circle
-            simNodes.forEach(n => {
-                if (n.fx != null && n.fy != null) return;
-                const dx = n.x - cx;
-                const dy = n.y - cy;
-                const dist = Math.hypot(dx, dy) || 1e-6;
-                if (dist > innerR) {
-                    const s = innerR / dist;
-                    n.x = cx + dx * s;
-                    n.y = cy + dy * s;
-                }
-            });
+            // Run more iterations for better layout
+            for (let i = 0; i < 400; i++) {
+                sim.tick();
+                
+                // Keep faculty nodes inside inner circle
+                simNodes.forEach(n => {
+                    if (n.fx != null && n.fy != null) return;
+                    const dx = n.x - cx;
+                    const dy = n.y - cy;
+                    const dist = Math.hypot(dx, dy) || 1e-6;
+                    const maxDist = innerR - n.r;
+                    if (dist > maxDist) {
+                        const s = maxDist / dist;
+                        n.x = cx + dx * s;
+                        n.y = cy + dy * s;
+                    }
+                });
+            }
 
             const out = {};
             simNodes.forEach(n => {
