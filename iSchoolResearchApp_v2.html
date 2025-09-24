@@ -28,6 +28,9 @@
             padding: 12px;
             height: 150px;
             overflow-y: auto;
+            border: 1px solid #d1d5db;
+            box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06),
+                        0 1px 2px 0 rgba(0, 0, 0, 0.05);
         }
         .info-panel::-webkit-scrollbar {
             width: 6px;
@@ -373,7 +376,7 @@
             const [selectedNode, setSelectedNode] = useState(null);
             
             // Visual controls with new defaults
-            const [maxNodeSize] = useState(250);
+            const [maxNodeSize] = useState(200);
             const [researchLabelSize, setResearchLabelSize] = useState(18);
             const [facultyLabelSize, setFacultyLabelSize] = useState(12);
             const [nodeOpacity] = useState(0.65);
@@ -463,8 +466,44 @@
                     g.setAttribute("transform", transform.toString());
                 };
                 
-                const zoom = d3.zoom().scaleExtent([0.2, 10]).on("zoom", zoomed);
-                d3.select(svg).call(zoom);
+                const zoom = d3.zoom()
+                    .scaleExtent([0.2, 10])
+                    .on("zoom", zoomed)
+                    .filter((event) => {
+                        // Allow zooming with wheel and dragging
+                        return event.type === 'wheel' || event.type === 'mousedown';
+                    });
+                
+                const selection = d3.select(svg);
+                selection.call(zoom);
+                
+                // Handle wheel events for cursor-based zooming
+                selection.on("wheel.zoom", function(event) {
+                    event.preventDefault();
+                    
+                    const currentTransform = d3.zoomTransform(svg);
+                    const direction = event.deltaY > 0 ? -1 : 1;
+                    const factor = 0.1;
+                    const newK = currentTransform.k * (1 + factor * direction);
+                    
+                    // Clamp to scale extent
+                    const clampedK = Math.max(0.2, Math.min(10, newK));
+                    
+                    // Get mouse position relative to SVG
+                    const [mouseX, mouseY] = d3.pointer(event, svg);
+                    
+                    // Calculate new transform to zoom at cursor position
+                    const newTransform = d3.zoomIdentity
+                        .translate(mouseX, mouseY)
+                        .scale(clampedK)
+                        .translate(-mouseX, -mouseY)
+                        .translate(currentTransform.x / currentTransform.k * clampedK, currentTransform.y / currentTransform.k * clampedK);
+                    
+                    selection.transition()
+                        .duration(100)
+                        .call(zoom.transform, newTransform);
+                });
+                
                 zoomRef.current = zoom;
             }, []);
 
