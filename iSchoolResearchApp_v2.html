@@ -15,35 +15,41 @@
         body { margin: 0; background: white; }
         svg text { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
         .info-popup {
-            position: absolute;
+            position: fixed;
             background: white;
             border: 2px solid #333;
             border-radius: 8px;
-            padding: 16px;
-            max-width: 400px;
+            padding: 12px;
+            max-width: 350px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
             z-index: 1000;
+            cursor: move;
+        }
+        .info-popup.dragging {
+            opacity: 0.9;
         }
         .info-popup h3 {
-            margin: 0 0 8px 0;
-            font-size: 1.25rem;
+            margin: 0 0 6px 0;
+            font-size: 1rem;
             font-weight: bold;
+            cursor: move;
         }
         .info-popup p {
             margin: 0;
-            line-height: 1.5;
+            line-height: 1.4;
+            font-size: 0.875rem;
         }
         .info-popup .close-btn {
             position: absolute;
             top: 8px;
             right: 8px;
-            width: 24px;
-            height: 24px;
+            width: 20px;
+            height: 20px;
             border-radius: 4px;
             border: none;
             background: #f0f0f0;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 14px;
             line-height: 1;
         }
         .info-popup .close-btn:hover {
@@ -293,8 +299,8 @@
             return lines;
         }
 
-        // Collision resolution
-        function resolveCollisions(positions, nodes, size, margin, maxNodeSize, padding = 2, iterations = 3) {
+        // Collision resolution with better separation
+        function resolveCollisions(positions, nodes, size, margin, maxNodeSize, padding = 8, iterations = 5) {
             const maxDegree = nodes.length ? Math.max(...nodes.map(n => n.degree || 0)) : 1;
             
             function toScreen(p) {
@@ -315,30 +321,63 @@
                 const base = positions[n.id] || { x: 0.5, y: 0.5 };
                 const s = toScreen(base);
                 const r = radiusForNode(n);
-                return { id: n.id, x: s.x, y: s.y, r: r + padding };
+                return { 
+                    id: n.id, 
+                    x: s.x, 
+                    y: s.y, 
+                    r: r + padding,
+                    type: n.type
+                };
             });
 
+            // Multiple passes with decreasing strength
             for (let it = 0; it < iterations; it++) {
-                for (let i = 0; i < work.length; i++) {
-                    for (let j = i + 1; j < work.length; j++) {
-                        const a = work[i];
-                        const b = work[j];
-                        let dx = a.x - b.x;
-                        let dy = a.y - b.y;
-                        let dist = Math.hypot(dx, dy) || 1e-6;
-                        const minDist = a.r + b.r;
-                        
-                        if (dist < minDist) {
-                            const overlap = (minDist - dist) / 2;
-                            dx /= dist;
-                            dy /= dist;
-                            a.x += dx * overlap;
-                            a.y += dy * overlap;
-                            b.x -= dx * overlap;
-                            b.y -= dy * overlap;
+                const strength = 1.0 - (it / iterations) * 0.5;
+                
+                // Use quadtree for efficient collision detection
+                const quadtree = d3.quadtree()
+                    .x(d => d.x)
+                    .y(d => d.y)
+                    .addAll(work);
+                
+                work.forEach(node => {
+                    const r1 = node.r;
+                    const nx1 = node.x;
+                    const ny1 = node.y;
+                    
+                    quadtree.visit((quad, x0, y0, x1, y1) => {
+                        if (!quad.length) {
+                            const d = quad.data;
+                            if (d && d !== node) {
+                                const dx = nx1 - d.x;
+                                const dy = ny1 - d.y;
+                                const dist = Math.hypot(dx, dy) || 1e-6;
+                                const minDist = r1 + d.r;
+                                
+                                if (dist < minDist) {
+                                    const overlap = (minDist - dist) * strength;
+                                    const mx = (dx / dist) * overlap * 0.5;
+                                    const my = (dy / dist) * overlap * 0.5;
+                                    
+                                    // Move nodes apart
+                                    node.x += mx;
+                                    node.y += my;
+                                    d.x -= mx;
+                                    d.y -= my;
+                                }
+                            }
                         }
-                    }
-                }
+                        // Stop traversing if the region doesn't intersect
+                        return x0 > nx1 + r1 + 100 || x1 < nx1 - r1 - 100 ||
+                               y0 > ny1 + r1 + 100 || y1 < ny1 - r1 - 100;
+                    });
+                });
+                
+                // Keep nodes within bounds
+                work.forEach(node => {
+                    node.x = Math.max(node.r, Math.min(size.width - node.r, node.x));
+                    node.y = Math.max(node.r, Math.min(size.height - node.r, node.y));
+                });
             }
 
             const out = {};
@@ -471,7 +510,7 @@
             const containerRef = useRef(null);
             const [size, setSize] = useState({ width: 800, height: 600 });
             
-            const margin = 50; // Increased margin
+            const margin = 20; // Reduced margin to use more space
 
             // Load data files on mount
             useEffect(() => {
@@ -517,10 +556,11 @@
             // Calculate positions
             useEffect(() => {
                 if (!nodes.length) return;
-                const basePositions = ringInnerForceLayout(nodes, edges, size);
+                const basePositions = ringInnerForceLayout(nodes, edges, size, maxNodeSize);
                 
+                // Enhanced collision resolution
                 if (avoidOverlap) {
-                    const resolved = resolveCollisions(basePositions, nodes, size, margin, maxNodeSize);
+                    const resolved = resolveCollisions(basePositions, nodes, size, 20, maxNodeSize, 8, 5);
                     setPositions(resolved);
                 } else {
                     setPositions(basePositions);
