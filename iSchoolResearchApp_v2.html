@@ -14,41 +14,6 @@
         html, body, #root { height: 100%; }
         body { margin: 0; background: white; }
         svg text { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
-        .info-popup {
-            position: absolute;
-            background: white;
-            border: 2px solid #333;
-            border-radius: 8px;
-            padding: 16px;
-            max-width: 400px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            z-index: 1000;
-        }
-        .info-popup h3 {
-            margin: 0 0 8px 0;
-            font-size: 1.25rem;
-            font-weight: bold;
-        }
-        .info-popup p {
-            margin: 0;
-            line-height: 1.5;
-        }
-        .info-popup .close-btn {
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            width: 24px;
-            height: 24px;
-            border-radius: 4px;
-            border: none;
-            background: #f0f0f0;
-            cursor: pointer;
-            font-size: 16px;
-            line-height: 1;
-        }
-        .info-popup .close-btn:hover {
-            background: #e0e0e0;
-        }
         .loading {
             display: flex;
             align-items: center;
@@ -56,6 +21,27 @@
             height: 100vh;
             font-size: 1.25rem;
             color: #666;
+        }
+        .info-panel {
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 12px;
+            height: 150px;
+            overflow-y: auto;
+        }
+        .info-panel::-webkit-scrollbar {
+            width: 6px;
+        }
+        .info-panel::-webkit-scrollbar-track {
+            background: #e5e7eb;
+            border-radius: 3px;
+        }
+        .info-panel::-webkit-scrollbar-thumb {
+            background: #9ca3af;
+            border-radius: 3px;
+        }
+        .info-panel::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
         }
     </style>
 </head>
@@ -385,13 +371,11 @@
             const [edges, setEdges] = useState([]);
             const [positions, setPositions] = useState({});
             const [selectedNode, setSelectedNode] = useState(null);
-            const [popupInfo, setPopupInfo] = useState(null);
-            const [popupPosition, setPopupPosition] = useState({ x: 0, y: 0 });
             
-            // Visual controls with defaults
-            const [maxNodeSize] = useState(200);
-            const [leftLabelSize] = useState(18);
-            const [rightLabelSize] = useState(12);
+            // Visual controls with new defaults
+            const [maxNodeSize] = useState(250);
+            const [researchLabelSize, setResearchLabelSize] = useState(18);
+            const [facultyLabelSize, setFacultyLabelSize] = useState(12);
             const [nodeOpacity] = useState(0.65);
             const [avoidOverlap] = useState(true);
             
@@ -502,27 +486,21 @@
                 return minR + (maxNodeSize - minR) * t;
             }
 
-            // Handle node click for popup
+            // Handle node click
             function handleNodeClick(event, node) {
                 event.stopPropagation();
                 setSelectedNode(node.id);
-                
-                // Calculate popup position
-                const svgRect = svgRef.current.getBoundingClientRect();
-                const nodePos = toScreen(positions[node.id] || { x: 0.5, y: 0.5 });
-                const transform = d3.zoomTransform(svgRef.current);
-                
-                const x = svgRect.left + transform.x + nodePos.x * transform.k;
-                const y = svgRect.top + transform.y + nodePos.y * transform.k;
-                
-                setPopupPosition({ x, y });
-                setPopupInfo(node);
             }
 
-            function closePopup() {
-                setPopupInfo(null);
+            function clearSelection() {
                 setSelectedNode(null);
             }
+
+            // Get selected node object
+            const selectedNodeObj = useMemo(() => {
+                if (!selectedNode) return null;
+                return nodes.find(n => n.id === selectedNode);
+            }, [selectedNode, nodes]);
 
             // Calculate neighbors for highlighting
             const neighbors = useMemo(() => {
@@ -580,14 +558,68 @@
                             Interactive visualization of research areas and faculty connections. Click on any node to see more information.
                         </p>
 
-                        <div className="text-sm text-gray-500 bg-gray-50 rounded p-3">
-                            <div className="font-medium mb-1">Data Status:</div>
-                            <div>{networkData.length} network connections</div>
-                            {researchInfo.length > 0 && <div>{researchInfo.length} research descriptions</div>}
-                            {facultyInfo.length > 0 && <div>{facultyInfo.length} faculty descriptions</div>}
+                        {/* Node Information Panel */}
+                        <div className="info-panel">
+                            {selectedNodeObj ? (
+                                <>
+                                    <div className="font-medium text-base mb-2">{selectedNodeObj.id}</div>
+                                    <div className="text-sm text-gray-600 mb-2">
+                                        {selectedNodeObj.type === "research" ? "Research Area" : "Faculty Member"}
+                                        {" • "}{selectedNodeObj.degree} connection{selectedNodeObj.degree !== 1 ? "s" : ""}
+                                    </div>
+                                    {selectedNodeObj.description ? (
+                                        <div className="text-sm text-gray-700 leading-relaxed">
+                                            {selectedNodeObj.description}
+                                        </div>
+                                    ) : (
+                                        <div className="text-sm italic text-gray-500">
+                                            No description available
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <div className="text-sm text-gray-500">
+                                    <div className="font-medium mb-1">Data Status:</div>
+                                    <div>{networkData.length} network connections</div>
+                                    {researchInfo.length > 0 && <div>{researchInfo.length} research descriptions</div>}
+                                    {facultyInfo.length > 0 && <div>{facultyInfo.length} faculty descriptions</div>}
+                                    <div className="mt-3 italic">Click any node to view details</div>
+                                </div>
+                            )}
                         </div>
 
-                        <div className="space-y-2 pt-4">
+                        {/* Label Size Controls */}
+                        <div className="space-y-3 pt-2">
+                            <div className="text-sm font-medium">Label Sizes</div>
+                            <div>
+                                <label className="text-xs text-gray-600">
+                                    Research Labels: {researchLabelSize}px
+                                </label>
+                                <input
+                                    type="range"
+                                    min="10"
+                                    max="30"
+                                    value={researchLabelSize}
+                                    onChange={(e) => setResearchLabelSize(Number(e.target.value))}
+                                    className="w-full"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-600">
+                                    Faculty Labels: {facultyLabelSize}px
+                                </label>
+                                <input
+                                    type="range"
+                                    min="8"
+                                    max="20"
+                                    value={facultyLabelSize}
+                                    onChange={(e) => setFacultyLabelSize(Number(e.target.value))}
+                                    className="w-full"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-2 pt-2">
                             <div className="text-sm font-medium">Export</div>
                             <div className="flex gap-2">
                                 <button
@@ -609,7 +641,6 @@
                             <p className="mb-2">• Research areas appear on the outer ring</p>
                             <p className="mb-2">• Faculty members are positioned inside</p>
                             <p className="mb-2">• Node size represents number of connections</p>
-                            <p className="mb-2">• Click any node to view details</p>
                             <p>• Scroll to zoom, drag to pan</p>
                         </div>
 
@@ -630,7 +661,7 @@
                             width={size.width}
                             height={size.height}
                             className="bg-white"
-                            onClick={closePopup}
+                            onClick={clearSelection}
                         >
                             <g ref={gRef}>
                                 {/* Edges */}
@@ -661,7 +692,7 @@
                                     const stroke = selectedNode === n.id ? "#111111" : "#ffffff";
                                     const dimmed = isNodeDimmed(n.id);
                                     const fillOpacity = dimmed ? nodeOpacity * 0.4 : nodeOpacity;
-                                    const fontSize = n.type === "research" ? leftLabelSize : rightLabelSize;
+                                    const fontSize = n.type === "research" ? researchLabelSize : facultyLabelSize;
                                     const fontWeight = n.type === "research" ? 700 : 400;
 
                                     return (
@@ -697,28 +728,6 @@
                             </g>
                         </svg>
                     </div>
-
-                    {/* Information Popup */}
-                    {popupInfo && (
-                        <div
-                            className="info-popup"
-                            style={{
-                                left: `${popupPosition.x + 20}px`,
-                                top: `${popupPosition.y - 40}px`
-                            }}
-                        >
-                            <button className="close-btn" onClick={closePopup}>×</button>
-                            <h3>{popupInfo.id}</h3>
-                            <p className="text-sm text-gray-600 mb-2">
-                                {popupInfo.type === "research" ? "Research Area" : "Faculty Member"}
-                            </p>
-                            {popupInfo.description ? (
-                                <p>{popupInfo.description}</p>
-                            ) : (
-                                <p className="italic text-gray-500">No description available</p>
-                            )}
-                        </div>
-                    )}
                 </div>
             );
         }
