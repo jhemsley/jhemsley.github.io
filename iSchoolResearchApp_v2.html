@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>iSchool Research Areas of Distinctive Excellence</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/d3@7/dist/d3.min.js"></script>
+    <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+    <style>
+        html, body, #root { height: 100%; }
+        body { margin: 0; background: white; }
+        svg text { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+        .info-popup {
+            position: absolute;
+            background: white;
+            border: 2px solid #333;
+            border-radius: 8px;
+            padding: 16px;
+            max-width: 400px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+        }
+        .info-popup h3 {
+            margin: 0 0 8px 0;
+            font-size: 1.25rem;
+            font-weight: bold;
+        }
+        .info-popup p {
+            margin: 0;
+            line-height: 1.5;
+        }
+        .info-popup .close-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            border: none;
+            background: #f0f0f0;
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+        }
+        .info-popup .close-btn:hover {
+            background: #e0e0e0;
+        }
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            font-size: 1.25rem;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useEffect, useMemo, useRef, useState } = React;
+
+        // Configuration for data files
+        const DATA_FILES = {
+            network: 'network.csv',           // Main network file with Research and Name columns
+            research: 'research_info.csv',    // Research area descriptions
+            faculty: 'faculty_info.csv'       // Faculty descriptions
+        };
+
+        // Color palette for research areas
+        const RESEARCH_PALETTE = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+            "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+            "#4e79a7", "#f28e2c", "#e15759", "#76b7b2", "#59a14f",
+            "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac"
+        ];
+
+        // Build graph from CSV data
+        function buildGraph(networkData, researchInfo, facultyInfo) {
+            const nodesMap = new Map();
+            const edges = [];
+            let colorIdx = 0;
+
+            // Create maps for descriptions
+            const researchDescriptions = new Map();
+            const facultyDescriptions = new Map();
+
+            // Process research info
+            if (researchInfo) {
+                researchInfo.forEach(row => {
+                    const keys = Object.keys(row);
+                    if (keys.length >= 2) {
+                        const area = String(row[keys[0]] || "").trim();
+                        const desc = String(row[keys[1]] || "").trim();
+                        if (area) researchDescriptions.set(area, desc);
+                    }
+                });
+            }
+
+            // Process faculty info
+            if (facultyInfo) {
+                facultyInfo.forEach(row => {
+                    const keys = Object.keys(row);
+                    if (keys.length >= 2) {
+                        const name = String(row[keys[0]] || "").trim();
+                        const desc = String(row[keys[1]] || "").trim();
+                        if (name) facultyDescriptions.set(name, desc);
+                    }
+                });
+            }
+
+            // Process network data
+            networkData.forEach((row, i) => {
+                const research = String(row.Research || "").trim();
+                const name = String(row.Name || "").trim();
+                
+                if (!research || !name) return;
+
+                // Add research node
+                if (!nodesMap.has(research)) {
+                    nodesMap.set(research, {
+                        id: research,
+                        type: "research",
+                        color: RESEARCH_PALETTE[colorIdx % RESEARCH_PALETTE.length],
+                        description: researchDescriptions.get(research) || ""
+                    });
+                    colorIdx++;
+                }
+
+                // Add faculty node
+                if (!nodesMap.has(name)) {
+                    nodesMap.set(name, {
+                        id: name,
+                        type: "faculty",
+                        color: "#666666",
+                        description: facultyDescriptions.get(name) || ""
+                    });
+                }
+
+                // Add edge
+                edges.push({
+                    id: `e${i}`,
+                    source: research,
+                    target: name,
+                    research
+                });
+            });
+
+            // Calculate degrees
+            const degree = new Map();
+            edges.forEach(e => {
+                degree.set(e.source, (degree.get(e.source) || 0) + 1);
+                degree.set(e.target, (degree.get(e.target) || 0) + 1);
+            });
+            
+            nodesMap.forEach(n => {
+                n.degree = degree.get(n.id) || 0;
+            });
+
+            return { nodes: Array.from(nodesMap.values()), edges };
+        }
+
+        // Ring + Inner Force layout
+        function ringInnerForceLayout(nodes, edges, size) {
+            const width = size.width;
+            const height = size.height;
+            const cx = width / 2;
+            const cy = height / 2;
+            const R = Math.min(width, height) * 0.42;
+            const innerR = R - 40;
+
+            const research = nodes.filter(n => n.type === "research");
+            const faculty = nodes.filter(n => n.type === "faculty");
+
+            // Position research nodes on outer ring
+            const simNodes = nodes.map(n => {
+                if (n.type === "research") {
+                    const idx = research.indexOf(n);
+                    const angle = (2 * Math.PI * idx) / Math.max(1, research.length);
+                    const x = cx + R * Math.cos(angle);
+                    const y = cy + R * Math.sin(angle);
+                    return { id: n.id, x, y, fx: x, fy: y };
+                } else {
+                    return {
+                        id: n.id,
+                        x: cx + (Math.random() * 2 - 1) * innerR * 0.6,
+                        y: cy + (Math.random() * 2 - 1) * innerR * 0.6
+                    };
+                }
+            });
+
+            const links = edges.map(e => ({ source: e.source, target: e.target }));
+
+            const sim = d3.forceSimulation(simNodes)
+                .force("link", d3.forceLink(links).id(d => d.id).distance(40).strength(0.7))
+                .force("charge", d3.forceManyBody().strength(-70))
+                .force("center", d3.forceCenter(cx, cy))
+                .force("collision", d3.forceCollide().radius(d => 10))
+                .stop();
+
+            sim.tick(320);
+
+            // Keep faculty nodes inside inner circle
+            simNodes.forEach(n => {
+                if (n.fx != null && n.fy != null) return;
+                const dx = n.x - cx;
+                const dy = n.y - cy;
+                const dist = Math.hypot(dx, dy) || 1e-6;
+                if (dist > innerR) {
+                    const s = innerR / dist;
+                    n.x = cx + dx * s;
+                    n.y = cy + dy * s;
+                }
+            });
+
+            const out = {};
+            simNodes.forEach(n => {
+                out[n.id] = { x: n.x / width, y: n.y / height };
+            });
+            return out;
+        }
+
+        // Collision resolution
+        function resolveCollisions(positions, nodes, size, margin, maxNodeSize, padding = 2, iterations = 3) {
+            const maxDegree = nodes.length ? Math.max(...nodes.map(n => n.degree || 0)) : 1;
+            
+            function toScreen(p) {
+                return {
+                    x: margin + (p.x || 0.5) * (size.width - 2 * margin),
+                    y: margin + (p.y || 0.5) * (size.height - 2 * margin)
+                };
+            }
+
+            function radiusForNode(n) {
+                const minR = 6;
+                const deg = n.degree || 0;
+                const t = Math.pow(deg / Math.max(1, maxDegree), 1.5);
+                return minR + (maxNodeSize - minR) * t;
+            }
+
+            const work = nodes.map(n => {
+                const base = positions[n.id] || { x: 0.5, y: 0.5 };
+                const s = toScreen(base);
+                const r = radiusForNode(n);
+                return { id: n.id, x: s.x, y: s.y, r: r + padding };
+            });
+
+            for (let it = 0; it < iterations; it++) {
+                for (let i = 0; i < work.length; i++) {
+                    for (let j = i + 1; j < work.length; j++) {
+                        const a = work[i];
+                        const b = work[j];
+                        let dx = a.x - b.x;
+                        let dy = a.y - b.y;
+                        let dist = Math.hypot(dx, dy) || 1e-6;
+                        const minDist = a.r + b.r;
+                        
+                        if (dist < minDist) {
+                            const overlap = (minDist - dist) / 2;
+                            dx /= dist;
+                            dy /= dist;
+                            a.x += dx * overlap;
+                            a.y += dy * overlap;
+                            b.x -= dx * overlap;
+                            b.y -= dy * overlap;
+                        }
+                    }
+                }
+            }
+
+            const out = {};
+            work.forEach(d => {
+                out[d.id] = {
+                    x: (d.x - margin) / Math.max(1, size.width - 2 * margin),
+                    y: (d.y - margin) / Math.max(1, size.height - 2 * margin)
+                };
+            });
+            return out;
+        }
+
+        // Export functions
+        function exportSVG(svgRef) {
+            const svg = svgRef.current;
+            if (!svg) return;
+            
+            const serializer = new XMLSerializer();
+            const copy = svg.cloneNode(true);
+            
+            // Add white background
+            const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            bg.setAttribute("x", "0");
+            bg.setAttribute("y", "0");
+            bg.setAttribute("width", String(svg.clientWidth));
+            bg.setAttribute("height", String(svg.clientHeight));
+            bg.setAttribute("fill", "white");
+            copy.insertBefore(bg, copy.firstChild);
+            
+            const str = serializer.serializeToString(copy);
+            const blob = new Blob([str], { type: "image/svg+xml;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "ischool_research_network.svg";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        async function exportPNG(svgRef) {
+            const svg = svgRef.current;
+            if (!svg) return;
+            
+            const serializer = new XMLSerializer();
+            const copy = svg.cloneNode(true);
+            
+            // Add white background
+            const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            bg.setAttribute("x", "0");
+            bg.setAttribute("y", "0");
+            bg.setAttribute("width", String(svg.clientWidth));
+            bg.setAttribute("height", String(svg.clientHeight));
+            bg.setAttribute("fill", "white");
+            copy.insertBefore(bg, copy.firstChild);
+            
+            const str = serializer.serializeToString(copy);
+            const svgBlob = new Blob([str], { type: "image/svg+xml;charset=utf-8" });
+            const url = URL.createObjectURL(svgBlob);
+            
+            const img = new Image();
+            const canvas = document.createElement("canvas");
+            canvas.width = svg.clientWidth;
+            canvas.height = svg.clientHeight;
+            const ctx = canvas.getContext("2d");
+            
+            await new Promise(resolve => {
+                img.onload = () => resolve();
+                img.src = url;
+            });
+            
+            ctx.fillStyle = "white";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0);
+            URL.revokeObjectURL(url);
+            
+            const a = document.createElement("a");
+            a.href = canvas.toDataURL("image/png");
+            a.download = "ischool_research_network.png";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        // Load CSV from URL
+        async function loadCSV(url) {
+            return new Promise((resolve, reject) => {
+                Papa.parse(url, {
+                    download: true,
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: (res) => {
+                        resolve(res.data || []);
+                    },
+                    error: (error) => {
+                        console.error(`Error loading ${url}:`, error);
+                        resolve([]); // Return empty array on error
+                    }
+                });
+            });
+        }
+
+        function App() {
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [networkData, setNetworkData] = useState([]);
+            const [researchInfo, setResearchInfo] = useState([]);
+            const [facultyInfo, setFacultyInfo] = useState([]);
+            const [nodes, setNodes] = useState([]);
+            const [edges, setEdges] = useState([]);
+            const [positions, setPositions] = useState({});
+            const [selectedNode, setSelectedNode] = useState(null);
+            const [popupInfo, setPopupInfo] = useState(null);
+            const [popupPosition, setPopupPosition] = useState({ x: 0, y: 0 });
+            
+            // Visual controls with defaults
+            const [maxNodeSize] = useState(200);
+            const [leftLabelSize] = useState(18);
+            const [rightLabelSize] = useState(12);
+            const [nodeOpacity] = useState(0.65);
+            const [avoidOverlap] = useState(true);
+            
+            const svgRef = useRef(null);
+            const zoomRef = useRef(null);
+            const gRef = useRef(null);
+            const containerRef = useRef(null);
+            const [size, setSize] = useState({ width: 800, height: 600 });
+            
+            const margin = 24;
+
+            // Load data files on mount
+            useEffect(() => {
+                async function loadData() {
+                    try {
+                        setLoading(true);
+                        
+                        // Get the base path of the current document
+                        const basePath = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
+                        
+                        // Load all three CSV files
+                        const [network, research, faculty] = await Promise.all([
+                            loadCSV(basePath + DATA_FILES.network),
+                            loadCSV(basePath + DATA_FILES.research),
+                            loadCSV(basePath + DATA_FILES.faculty)
+                        ]);
+
+                        if (network.length === 0) {
+                            setError(`Could not load network data. Please ensure ${DATA_FILES.network} exists in the same directory.`);
+                        } else {
+                            setNetworkData(network);
+                            setResearchInfo(research);
+                            setFacultyInfo(faculty);
+                        }
+                    } catch (err) {
+                        setError(`Error loading data files: ${err.message}`);
+                    } finally {
+                        setLoading(false);
+                    }
+                }
+
+                loadData();
+            }, []);
+
+            // Build graph when data changes
+            useEffect(() => {
+                if (!networkData.length) return;
+                const { nodes: n, edges: e } = buildGraph(networkData, researchInfo, facultyInfo);
+                setNodes(n);
+                setEdges(e);
+            }, [networkData, researchInfo, facultyInfo]);
+
+            // Calculate positions
+            useEffect(() => {
+                if (!nodes.length) return;
+                const basePositions = ringInnerForceLayout(nodes, edges, size);
+                
+                if (avoidOverlap) {
+                    const resolved = resolveCollisions(basePositions, nodes, size, margin, maxNodeSize);
+                    setPositions(resolved);
+                } else {
+                    setPositions(basePositions);
+                }
+            }, [nodes, edges, size, maxNodeSize, avoidOverlap]);
+
+            // Resize observer
+            useEffect(() => {
+                const el = containerRef.current;
+                if (!el) return;
+                const ro = new ResizeObserver(() => {
+                    setSize({ width: el.clientWidth, height: el.clientHeight });
+                });
+                ro.observe(el);
+                return () => ro.disconnect();
+            }, []);
+
+            // Setup zoom
+            useEffect(() => {
+                const svg = svgRef.current;
+                const g = gRef.current;
+                if (!svg || !g) return;
+                
+                const zoomed = (event) => {
+                    const { transform } = event;
+                    g.setAttribute("transform", transform.toString());
+                };
+                
+                const zoom = d3.zoom().scaleExtent([0.2, 10]).on("zoom", zoomed);
+                d3.select(svg).call(zoom);
+                zoomRef.current = zoom;
+            }, []);
+
+            // Helper functions
+            const toScreen = (p) => ({
+                x: margin + (p.x || 0.5) * (size.width - 2 * margin),
+                y: margin + (p.y || 0.5) * (size.height - 2 * margin)
+            });
+
+            const maxDegree = useMemo(
+                () => (nodes.length ? Math.max(...nodes.map(n => n.degree || 0)) : 1),
+                [nodes]
+            );
+
+            function radiusForNode(n) {
+                const minR = 6;
+                const deg = n.degree || 0;
+                const t = Math.pow(deg / Math.max(1, maxDegree), 1.5);
+                return minR + (maxNodeSize - minR) * t;
+            }
+
+            // Handle node click for popup
+            function handleNodeClick(event, node) {
+                event.stopPropagation();
+                setSelectedNode(node.id);
+                
+                // Calculate popup position
+                const svgRect = svgRef.current.getBoundingClientRect();
+                const nodePos = toScreen(positions[node.id] || { x: 0.5, y: 0.5 });
+                const transform = d3.zoomTransform(svgRef.current);
+                
+                const x = svgRect.left + transform.x + nodePos.x * transform.k;
+                const y = svgRect.top + transform.y + nodePos.y * transform.k;
+                
+                setPopupPosition({ x, y });
+                setPopupInfo(node);
+            }
+
+            function closePopup() {
+                setPopupInfo(null);
+                setSelectedNode(null);
+            }
+
+            // Calculate neighbors for highlighting
+            const neighbors = useMemo(() => {
+                const map = new Map();
+                nodes.forEach(n => map.set(n.id, new Set()));
+                edges.forEach(e => {
+                    map.get(e.source).add(e.target);
+                    map.get(e.target).add(e.source);
+                });
+                return map;
+            }, [nodes, edges]);
+
+            const isEdgeActive = (e) => !selectedNode || e.source === selectedNode || e.target === selectedNode;
+            const isNodeDimmed = (id) => selectedNode && !(id === selectedNode || neighbors.get(selectedNode).has(id));
+
+            function edgePath(e) {
+                const a = toScreen(positions[e.source] || { x: 0.5, y: 0.5 });
+                const b = toScreen(positions[e.target] || { x: 0.5, y: 0.5 });
+                return `M${a.x},${a.y} L${b.x},${b.y}`;
+            }
+
+            const idToNode = useMemo(() => new Map(nodes.map(n => [n.id, n])), [nodes]);
+
+            // Show loading state
+            if (loading) {
+                return <div className="loading">Loading data files...</div>;
+            }
+
+            // Show error state
+            if (error) {
+                return (
+                    <div className="p-8">
+                        <h1 className="text-xl font-bold mb-4">iSchool Research Areas of Distinctive Excellence</h1>
+                        <div className="bg-red-50 border border-red-200 rounded p-4">
+                            <p className="text-red-800">{error}</p>
+                            <p className="text-sm text-gray-600 mt-2">
+                                Please ensure the following CSV files exist in the same directory as this HTML file:
+                            </p>
+                            <ul className="list-disc list-inside text-sm text-gray-600 mt-1">
+                                <li>{DATA_FILES.network} - Network connections (Research, Name columns)</li>
+                                <li>{DATA_FILES.research} - Research area descriptions</li>
+                                <li>{DATA_FILES.faculty} - Faculty information</li>
+                            </ul>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="w-full h-screen bg-white flex">
+                    {/* Sidebar */}
+                    <div className="w-80 flex-shrink-0 border-r border-gray-200 p-4 space-y-4 overflow-y-auto">
+                        <h1 className="text-xl font-bold">iSchool Research Areas of Distinctive Excellence</h1>
+                        <p className="text-sm text-gray-600">
+                            Interactive visualization of research areas and faculty connections. Click on any node to see more information.
+                        </p>
+
+                        <div className="text-sm text-gray-500 bg-gray-50 rounded p-3">
+                            <div className="font-medium mb-1">Data Status:</div>
+                            <div>{networkData.length} network connections</div>
+                            {researchInfo.length > 0 && <div>{researchInfo.length} research descriptions</div>}
+                            {facultyInfo.length > 0 && <div>{facultyInfo.length} faculty descriptions</div>}
+                        </div>
+
+                        <div className="space-y-2 pt-4">
+                            <div className="text-sm font-medium">Export</div>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => exportPNG(svgRef)}
+                                    className="px-3 py-1.5 bg-green-600 text-white rounded-md hover:bg-green-700"
+                                >
+                                    Export PNG
+                                </button>
+                                <button
+                                    onClick={() => exportSVG(svgRef)}
+                                    className="px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                                >
+                                    Export SVG
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="pt-4 text-xs text-gray-500">
+                            <p className="mb-2">• Research areas appear on the outer ring</p>
+                            <p className="mb-2">• Faculty members are positioned inside</p>
+                            <p className="mb-2">• Node size represents number of connections</p>
+                            <p className="mb-2">• Click any node to view details</p>
+                            <p>• Scroll to zoom, drag to pan</p>
+                        </div>
+
+                        <div className="text-xs text-gray-400 border-t pt-4">
+                            <div className="font-medium mb-1">Expected CSV files:</div>
+                            <div className="space-y-1">
+                                <div>• {DATA_FILES.network}</div>
+                                <div>• {DATA_FILES.research}</div>
+                                <div>• {DATA_FILES.faculty}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Graph Canvas */}
+                    <div className="flex-1" ref={containerRef}>
+                        <svg
+                            ref={svgRef}
+                            width={size.width}
+                            height={size.height}
+                            className="bg-white"
+                            onClick={closePopup}
+                        >
+                            <g ref={gRef}>
+                                {/* Edges */}
+                                {edges.map(e => {
+                                    const researchNode = idToNode.get(e.research);
+                                    const color = researchNode?.color || "#999";
+                                    const stroke = isEdgeActive(e) ? color : "#ccc";
+                                    const strokeWidth = isEdgeActive(e) ? 1.8 : 1.4;
+                                    const opacity = isEdgeActive(e) ? 0.9 : 0.6;
+                                    
+                                    return (
+                                        <path
+                                            key={e.id}
+                                            d={edgePath(e)}
+                                            stroke={stroke}
+                                            strokeWidth={strokeWidth}
+                                            fill="none"
+                                            opacity={opacity}
+                                        />
+                                    );
+                                })}
+
+                                {/* Nodes */}
+                                {nodes.map(n => {
+                                    const p = toScreen(positions[n.id] || { x: 0.5, y: 0.5 });
+                                    const r = radiusForNode(n);
+                                    const fill = n.type === "research" ? n.color : "#666666";
+                                    const stroke = selectedNode === n.id ? "#111111" : "#ffffff";
+                                    const dimmed = isNodeDimmed(n.id);
+                                    const fillOpacity = dimmed ? nodeOpacity * 0.4 : nodeOpacity;
+                                    const fontSize = n.type === "research" ? leftLabelSize : rightLabelSize;
+                                    const fontWeight = n.type === "research" ? 700 : 400;
+
+                                    return (
+                                        <g
+                                            key={n.id}
+                                            transform={`translate(${p.x},${p.y})`}
+                                            style={{ cursor: "pointer" }}
+                                            onClick={(e) => handleNodeClick(e, n)}
+                                        >
+                                            <circle
+                                                r={r}
+                                                fill={fill}
+                                                stroke={stroke}
+                                                strokeWidth={1.5}
+                                                fillOpacity={fillOpacity}
+                                            />
+                                            <text
+                                                x={0}
+                                                y={n.type === "research" ? 0 : -(r + 6)}
+                                                textAnchor="middle"
+                                                dominantBaseline={n.type === "research" ? "middle" : "auto"}
+                                                fontSize={fontSize}
+                                                fontWeight={fontWeight}
+                                                fill="#111111"
+                                                className="select-none"
+                                                style={{ pointerEvents: "none" }}
+                                            >
+                                                {n.id}
+                                            </text>
+                                        </g>
+                                    );
+                                })}
+                            </g>
+                        </svg>
+                    </div>
+
+                    {/* Information Popup */}
+                    {popupInfo && (
+                        <div
+                            className="info-popup"
+                            style={{
+                                left: `${popupPosition.x + 20}px`,
+                                top: `${popupPosition.y - 40}px`
+                            }}
+                        >
+                            <button className="close-btn" onClick={closePopup}>×</button>
+                            <h3>{popupInfo.id}</h3>
+                            <p className="text-sm text-gray-600 mb-2">
+                                {popupInfo.type === "research" ? "Research Area" : "Faculty Member"}
+                            </p>
+                            {popupInfo.description ? (
+                                <p>{popupInfo.description}</p>
+                            ) : (
+                                <p className="italic text-gray-500">No description available</p>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById("root"));
+        root.render(<App />);
+    </script>
+</body>
+</html>
