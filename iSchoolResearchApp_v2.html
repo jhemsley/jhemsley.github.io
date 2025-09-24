@@ -11,7 +11,7 @@
     <script src="https://unpkg.com/d3@7/dist/d3.min.js"></script>
     <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
     <style>
-        html, body, #root { height: 100%; }
+        html, body, #root { height: 100%; overflow: hidden; }
         body { margin: 0; background: white; }
         svg text { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
         .info-popup {
@@ -57,6 +57,7 @@
             font-size: 1.25rem;
             color: #666;
         }
+        input[type="range"] { width: 100%; }
     </style>
 </head>
 <body>
@@ -171,8 +172,8 @@
             const height = size.height;
             const cx = width / 2;
             const cy = height / 2;
-            const R = Math.min(width, height) * 0.42;
-            const innerR = R - 40;
+            const R = Math.min(width, height) * 0.35; // Reduced to fit better
+            const innerR = R - 50;
 
             const research = nodes.filter(n => n.type === "research");
             const faculty = nodes.filter(n => n.type === "faculty");
@@ -188,8 +189,8 @@
                 } else {
                     return {
                         id: n.id,
-                        x: cx + (Math.random() * 2 - 1) * innerR * 0.6,
-                        y: cy + (Math.random() * 2 - 1) * innerR * 0.6
+                        x: cx + (Math.random() * 2 - 1) * innerR * 0.5,
+                        y: cy + (Math.random() * 2 - 1) * innerR * 0.5
                     };
                 }
             });
@@ -197,10 +198,10 @@
             const links = edges.map(e => ({ source: e.source, target: e.target }));
 
             const sim = d3.forceSimulation(simNodes)
-                .force("link", d3.forceLink(links).id(d => d.id).distance(40).strength(0.7))
-                .force("charge", d3.forceManyBody().strength(-70))
+                .force("link", d3.forceLink(links).id(d => d.id).distance(30).strength(0.5))
+                .force("charge", d3.forceManyBody().strength(-50))
                 .force("center", d3.forceCenter(cx, cy))
-                .force("collision", d3.forceCollide().radius(d => 10))
+                .force("collision", d3.forceCollide().radius(d => 8))
                 .stop();
 
             sim.tick(320);
@@ -223,6 +224,33 @@
                 out[n.id] = { x: n.x / width, y: n.y / height };
             });
             return out;
+        }
+
+        // Text wrapping helper
+        function wrapText(text, maxWidth) {
+            const words = text.split(/\s+/);
+            const lines = [];
+            let currentLine = [];
+            let currentWidth = 0;
+            const charWidth = 7; // Approximate character width for font
+            
+            words.forEach(word => {
+                const wordWidth = word.length * charWidth;
+                if (currentWidth + wordWidth > maxWidth && currentLine.length > 0) {
+                    lines.push(currentLine.join(' '));
+                    currentLine = [word];
+                    currentWidth = wordWidth;
+                } else {
+                    currentLine.push(word);
+                    currentWidth += wordWidth + charWidth;
+                }
+            });
+            
+            if (currentLine.length > 0) {
+                lines.push(currentLine.join(' '));
+            }
+            
+            return lines;
         }
 
         // Collision resolution
@@ -387,12 +415,14 @@
             const [selectedNode, setSelectedNode] = useState(null);
             const [popupInfo, setPopupInfo] = useState(null);
             const [popupPosition, setPopupPosition] = useState({ x: 0, y: 0 });
+            const [searchQuery, setSearchQuery] = useState("");
             
-            // Visual controls with defaults
+            // Visual controls
             const [maxNodeSize] = useState(200);
             const [leftLabelSize] = useState(18);
             const [rightLabelSize] = useState(12);
-            const [nodeOpacity] = useState(0.65);
+            const [researchOpacity, setResearchOpacity] = useState(0.65);
+            const [facultyOpacity, setFacultyOpacity] = useState(0.65);
             const [avoidOverlap] = useState(true);
             
             const svgRef = useRef(null);
@@ -401,7 +431,7 @@
             const containerRef = useRef(null);
             const [size, setSize] = useState({ width: 800, height: 600 });
             
-            const margin = 24;
+            const margin = 50; // Increased margin
 
             // Load data files on mount
             useEffect(() => {
@@ -468,21 +498,90 @@
                 return () => ro.disconnect();
             }, []);
 
-            // Setup zoom
+            // Setup zoom with auto-fit
             useEffect(() => {
                 const svg = svgRef.current;
                 const g = gRef.current;
-                if (!svg || !g) return;
+                if (!svg || !g || !nodes.length) return;
                 
-                const zoomed = (event) => {
-                    const { transform } = event;
-                    g.setAttribute("transform", transform.toString());
-                };
+                const zoom = d3.zoom()
+                    .scaleExtent([0.1, 10])
+                    .on("zoom", (event) => {
+                        g.setAttribute("transform", event.transform.toString());
+                    });
                 
-                const zoom = d3.zoom().scaleExtent([0.2, 10]).on("zoom", zoomed);
                 d3.select(svg).call(zoom);
                 zoomRef.current = zoom;
-            }, []);
+                
+                // Auto-fit on initial load
+                fitToView();
+            }, [nodes.length, size]);
+
+            // Fit to view function
+            function fitToView() {
+                const svg = svgRef.current;
+                if (!svg || !nodes.length || !zoomRef.current) return;
+                
+                // Calculate bounds of all nodes
+                let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+                nodes.forEach(n => {
+                    const p = toScreen(positions[n.id] || { x: 0.5, y: 0.5 });
+                    const r = radiusForNode(n);
+                    minX = Math.min(minX, p.x - r);
+                    maxX = Math.max(maxX, p.x + r);
+                    minY = Math.min(minY, p.y - r);
+                    maxY = Math.max(maxY, p.y + r);
+                });
+                
+                const width = maxX - minX;
+                const height = maxY - minY;
+                const midX = (minX + maxX) / 2;
+                const midY = (minY + maxY) / 2;
+                
+                const scale = Math.min(
+                    (size.width - 100) / width,
+                    (size.height - 100) / height,
+                    1
+                ) * 0.9;
+                
+                const translate = [
+                    size.width / 2 - scale * midX,
+                    size.height / 2 - scale * midY
+                ];
+                
+                d3.select(svg).transition().duration(750).call(
+                    zoomRef.current.transform,
+                    d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale)
+                );
+            }
+
+            // Search function
+            function handleSearch() {
+                const query = searchQuery.trim().toLowerCase();
+                if (!query) {
+                    setSelectedNode(null);
+                    return;
+                }
+                
+                const match = nodes.find(n => 
+                    n.id.toLowerCase().includes(query)
+                );
+                
+                if (match) {
+                    setSelectedNode(match.id);
+                    // Center on the node
+                    const svg = svgRef.current;
+                    const p = toScreen(positions[match.id] || { x: 0.5, y: 0.5 });
+                    const currentTransform = d3.zoomTransform(svg);
+                    
+                    d3.select(svg).transition().duration(500).call(
+                        zoomRef.current.transform,
+                        d3.zoomIdentity
+                            .translate(size.width / 2 - p.x, size.height / 2 - p.y)
+                            .scale(currentTransform.k)
+                    );
+                }
+            }
 
             // Helper functions
             const toScreen = (p) => ({
@@ -521,7 +620,7 @@
 
             function closePopup() {
                 setPopupInfo(null);
-                setSelectedNode(null);
+                if (!searchQuery) setSelectedNode(null);
             }
 
             // Calculate neighbors for highlighting
@@ -580,6 +679,70 @@
                             Interactive visualization of research areas and faculty connections. Click on any node to see more information.
                         </p>
 
+                        {/* Search */}
+                        <div className="space-y-2">
+                            <label className="block text-sm font-medium">Search</label>
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                                    placeholder="Enter name or research area..."
+                                    className="flex-1 px-2 py-1 border border-gray-300 rounded"
+                                />
+                                <button
+                                    onClick={handleSearch}
+                                    className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+                                >
+                                    Find
+                                </button>
+                            </div>
+                            {searchQuery && (
+                                <button
+                                    onClick={() => { setSearchQuery(""); setSelectedNode(null); }}
+                                    className="text-xs text-blue-600 hover:underline"
+                                >
+                                    Clear search
+                                </button>
+                            )}
+                        </div>
+
+                        {/* Opacity Controls */}
+                        <div className="space-y-3">
+                            <div className="text-sm font-medium">Node Transparency</div>
+                            
+                            <div>
+                                <div className="flex justify-between text-xs mb-1">
+                                    <span>Research Areas</span>
+                                    <span>{researchOpacity.toFixed(2)}</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="0.1"
+                                    max="1"
+                                    step="0.05"
+                                    value={researchOpacity}
+                                    onChange={(e) => setResearchOpacity(parseFloat(e.target.value))}
+                                />
+                            </div>
+                            
+                            <div>
+                                <div className="flex justify-between text-xs mb-1">
+                                    <span>Faculty Members</span>
+                                    <span>{facultyOpacity.toFixed(2)}</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="0.1"
+                                    max="1"
+                                    step="0.05"
+                                    value={facultyOpacity}
+                                    onChange={(e) => setFacultyOpacity(parseFloat(e.target.value))}
+                                />
+                            </div>
+                        </div>
+
                         <div className="text-sm text-gray-500 bg-gray-50 rounded p-3">
                             <div className="font-medium mb-1">Data Status:</div>
                             <div>{networkData.length} network connections</div>
@@ -587,18 +750,30 @@
                             {facultyInfo.length > 0 && <div>{facultyInfo.length} faculty descriptions</div>}
                         </div>
 
-                        <div className="space-y-2 pt-4">
+                        {/* View Controls */}
+                        <div className="space-y-2">
+                            <div className="text-sm font-medium">View Controls</div>
+                            <button
+                                onClick={fitToView}
+                                className="w-full px-3 py-1.5 bg-gray-600 text-white rounded hover:bg-gray-700"
+                            >
+                                Reset View
+                            </button>
+                        </div>
+
+                        {/* Export */}
+                        <div className="space-y-2">
                             <div className="text-sm font-medium">Export</div>
                             <div className="flex gap-2">
                                 <button
                                     onClick={() => exportPNG(svgRef)}
-                                    className="px-3 py-1.5 bg-green-600 text-white rounded-md hover:bg-green-700"
+                                    className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700"
                                 >
                                     Export PNG
                                 </button>
                                 <button
                                     onClick={() => exportSVG(svgRef)}
-                                    className="px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                                    className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"
                                 >
                                     Export SVG
                                 </button>
@@ -612,15 +787,6 @@
                             <p className="mb-2">• Click any node to view details</p>
                             <p>• Scroll to zoom, drag to pan</p>
                         </div>
-
-                        <div className="text-xs text-gray-400 border-t pt-4">
-                            <div className="font-medium mb-1">Expected CSV files:</div>
-                            <div className="space-y-1">
-                                <div>• {DATA_FILES.network}</div>
-                                <div>• {DATA_FILES.research}</div>
-                                <div>• {DATA_FILES.faculty}</div>
-                            </div>
-                        </div>
                     </div>
 
                     {/* Graph Canvas */}
@@ -633,7 +799,7 @@
                             onClick={closePopup}
                         >
                             <g ref={gRef}>
-                                {/* Edges */}
+                                {/* Edges - drawn first so they're behind nodes */}
                                 {edges.map(e => {
                                     const researchNode = idToNode.get(e.research);
                                     const color = researchNode?.color || "#999";
@@ -653,16 +819,15 @@
                                     );
                                 })}
 
-                                {/* Nodes */}
+                                {/* Nodes - drawn second so they're above edges */}
                                 {nodes.map(n => {
                                     const p = toScreen(positions[n.id] || { x: 0.5, y: 0.5 });
                                     const r = radiusForNode(n);
                                     const fill = n.type === "research" ? n.color : "#666666";
                                     const stroke = selectedNode === n.id ? "#111111" : "#ffffff";
                                     const dimmed = isNodeDimmed(n.id);
-                                    const fillOpacity = dimmed ? nodeOpacity * 0.4 : nodeOpacity;
-                                    const fontSize = n.type === "research" ? leftLabelSize : rightLabelSize;
-                                    const fontWeight = n.type === "research" ? 700 : 400;
+                                    const baseOpacity = n.type === "research" ? researchOpacity : facultyOpacity;
+                                    const fillOpacity = dimmed ? baseOpacity * 0.4 : baseOpacity;
 
                                     return (
                                         <g
@@ -678,21 +843,68 @@
                                                 strokeWidth={1.5}
                                                 fillOpacity={fillOpacity}
                                             />
-                                            <text
-                                                x={0}
-                                                y={n.type === "research" ? 0 : -(r + 6)}
-                                                textAnchor="middle"
-                                                dominantBaseline={n.type === "research" ? "middle" : "auto"}
-                                                fontSize={fontSize}
-                                                fontWeight={fontWeight}
-                                                fill="#111111"
-                                                className="select-none"
-                                                style={{ pointerEvents: "none" }}
-                                            >
-                                                {n.id}
-                                            </text>
                                         </g>
                                     );
+                                })}
+
+                                {/* Labels - drawn last so they're on top */}
+                                {nodes.map(n => {
+                                    const p = toScreen(positions[n.id] || { x: 0.5, y: 0.5 });
+                                    const r = radiusForNode(n);
+                                    const fontSize = n.type === "research" ? leftLabelSize : rightLabelSize;
+                                    const fontWeight = n.type === "research" ? 700 : 400;
+
+                                    if (n.type === "research") {
+                                        // Wrap text for research nodes
+                                        const lines = wrapText(n.id, r * 2 - 10);
+                                        const lineHeight = fontSize * 1.1;
+                                        const startY = -(lines.length - 1) * lineHeight / 2;
+                                        
+                                        return (
+                                            <g
+                                                key={`label-${n.id}`}
+                                                transform={`translate(${p.x},${p.y})`}
+                                                style={{ pointerEvents: "none" }}
+                                            >
+                                                {lines.map((line, i) => (
+                                                    <text
+                                                        key={i}
+                                                        x={0}
+                                                        y={startY + i * lineHeight}
+                                                        textAnchor="middle"
+                                                        dominantBaseline="middle"
+                                                        fontSize={fontSize}
+                                                        fontWeight={fontWeight}
+                                                        fill="#111111"
+                                                        className="select-none"
+                                                    >
+                                                        {line}
+                                                    </text>
+                                                ))}
+                                            </g>
+                                        );
+                                    } else {
+                                        // Faculty labels above nodes
+                                        return (
+                                            <g
+                                                key={`label-${n.id}`}
+                                                transform={`translate(${p.x},${p.y})`}
+                                                style={{ pointerEvents: "none" }}
+                                            >
+                                                <text
+                                                    x={0}
+                                                    y={-(r + 6)}
+                                                    textAnchor="middle"
+                                                    fontSize={fontSize}
+                                                    fontWeight={fontWeight}
+                                                    fill="#111111"
+                                                    className="select-none"
+                                                >
+                                                    {n.id}
+                                                </text>
+                                            </g>
+                                        );
+                                    }
                                 })}
                             </g>
                         </svg>
