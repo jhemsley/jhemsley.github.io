@@ -1,83 +1,83 @@
-Research,Name
-"Cybersecurity, Privacy & Infrastructure",Bastidas
-"Cybersecurity, Privacy & Infrastructure",Cheon
-"Cybersecurity, Privacy & Infrastructure",Clarke
-"Cybersecurity, Privacy & Infrastructure",Dedrick
-"Cybersecurity, Privacy & Infrastructure",Derick
-"Cybersecurity, Privacy & Infrastructure",Erdogan
-"Cybersecurity, Privacy & Infrastructure",Fudge
-"Cybersecurity, Privacy & Infrastructure",McKnight
-"Cybersecurity, Privacy & Infrastructure",Park
-"Cybersecurity, Privacy & Infrastructure",Stanton
-Computational Social Science,Crowston
-Computational Social Science,Erdogan
-Computational Social Science,Erdogan
-Computational Social Science,Gandel
-Computational Social Science,Hemsley
-Computational Social Science,Introne
-Computational Social Science,King
-Computational Social Science,Li
-Computational Social Science,Oesterlund
-Computational Social Science,Qin
-Computational Social Science,Saltz
-Computational Social Science,Stanton
-Computational Social Science,Stromer-Galley
-Computational Social Science,Tacheva
-Computational Social Science,Yu
-Digital Innovation & Management,Crowston
-Digital Innovation & Management,Erdogan
-Digital Innovation & Management,Erickson
-Digital Innovation & Management,Gandel
-Digital Innovation & Management,Introne
-Digital Innovation & Management,King
-Digital Innovation & Management,Kingma
-Digital Innovation & Management,McKnight
-Digital Innovation & Management,Mcknight
-Digital Innovation & Management,Oesterlund
-Digital Innovation & Management,Patin
-Digital Innovation & Management,Saltz
-Digital Innovation & Management,Sawyer
-Digital Innovation & Management,Stanton
-Digital Innovation & Management,Zhang
-Human-Centered Technology and Design,Banks
-Human-Centered Technology and Design,Baobao
-Human-Centered Technology and Design,Capano
-Human-Centered Technology and Design,Cheon
-Human-Centered Technology and Design,Clarke
-Human-Centered Technology and Design,Crowston
-Human-Centered Technology and Design,Dedrick
-Human-Centered Technology and Design,Ekbia
-Human-Centered Technology and Design,Erdogan
-Human-Centered Technology and Design,Himmelreich
-Human-Centered Technology and Design,Introne
-Human-Centered Technology and Design,Oesterlund
-Libraries and Cultural Informatics,Arnone
-Libraries and Cultural Informatics,Chancellor
-Libraries and Cultural Informatics,Clarke
-Libraries and Cultural Informatics,Clarke
-Libraries and Cultural Informatics,Ekbia
-Libraries and Cultural Informatics,Gray
-Libraries and Cultural Informatics,Modrow
-Libraries and Cultural Informatics,Oakleaf
-Libraries and Cultural Informatics,Patin
-Libraries and Cultural Informatics,Qin
-Libraries and Cultural Informatics,Small
-Libraries and Cultural Informatics,Tacheva
-Libraries and Cultural Informatics,Yu
-Where people meet Artificial Intelligence,Banks
-Where people meet Artificial Intelligence,Baobao
-Where people meet Artificial Intelligence,Bastidas
-Where people meet Artificial Intelligence,Cheon
-Where people meet Artificial Intelligence,Crowston
-Where people meet Artificial Intelligence,Ekbia
-Where people meet Artificial Intelligence,Erickson
-Where people meet Artificial Intelligence,Fudge
-Where people meet Artificial Intelligence,Himmelreich
-Where people meet Artificial Intelligence,Introne
-Where people meet Artificial Intelligence,King
-Where people meet Artificial Intelligence,Oakleaf
-Where people meet Artificial Intelligence,Oesterlund
-Where people meet Artificial Intelligence,Sawyer
-Where people meet Artificial Intelligence,Stromer-Galley
-Where people meet Artificial Intelligence,Tacheva
-Where people meet Artificial Intelligence,Yu
+Research,Name,SubArea
+Where People and Organizations Meet Technology,Bastidas,"Cybersecurity, Privacy & Infrastructure"
+Where People and Organizations Meet Technology,Cheon,"Cybersecurity, Privacy & Infrastructure"
+Where People and Organizations Meet Technology,Clarke,"Cybersecurity, Privacy & Infrastructure"
+Where People and Organizations Meet Technology,Dedrick,"Cybersecurity, Privacy & Infrastructure"
+Where People and Organizations Meet Technology,Derick,"Cybersecurity, Privacy & Infrastructure"
+Where People and Organizations Meet Technology,Erdogan,"Cybersecurity, Privacy & Infrastructure"
+Where People and Organizations Meet Technology,Fudge,"Cybersecurity, Privacy & Infrastructure"
+Where People and Organizations Meet Technology,McKnight,"Cybersecurity, Privacy & Infrastructure"
+Where People and Organizations Meet Technology,Park,"Cybersecurity, Privacy & Infrastructure"
+Where People and Organizations Meet Technology,Stanton,"Cybersecurity, Privacy & Infrastructure"
+Computational Social Science,Crowston,Computational Social Science
+Computational Social Science,Erdogan,Computational Social Science
+Computational Social Science,Erdogan,Computational Social Science
+Computational Social Science,Gandel,Computational Social Science
+Computational Social Science,Hemsley,Computational Social Science
+Computational Social Science,Introne,Computational Social Science
+Computational Social Science,King,Computational Social Science
+Computational Social Science,Li,Computational Social Science
+Computational Social Science,Oesterlund,Computational Social Science
+Computational Social Science,Qin,Computational Social Science
+Computational Social Science,Saltz,Computational Social Science
+Computational Social Science,Stanton,Computational Social Science
+Computational Social Science,Stromer-Galley,Computational Social Science
+Computational Social Science,Tacheva,Computational Social Science
+Computational Social Science,Yu,Computational Social Science
+Where People and Organizations Meet Technology,Crowston,Digital Innovation & Management
+Where People and Organizations Meet Technology,Erdogan,Digital Innovation & Management
+Where People and Organizations Meet Technology,Erickson,Digital Innovation & Management
+Where People and Organizations Meet Technology,Gandel,Digital Innovation & Management
+Where People and Organizations Meet Technology,Introne,Digital Innovation & Management
+Where People and Organizations Meet Technology,King,Digital Innovation & Management
+Where People and Organizations Meet Technology,Kingma,Digital Innovation & Management
+Where People and Organizations Meet Technology,McKnight,Digital Innovation & Management
+Where People and Organizations Meet Technology,Mcknight,Digital Innovation & Management
+Where People and Organizations Meet Technology,Oesterlund,Digital Innovation & Management
+Where People and Organizations Meet Technology,Patin,Digital Innovation & Management
+Where People and Organizations Meet Technology,Saltz,Digital Innovation & Management
+Where People and Organizations Meet Technology,Sawyer,Digital Innovation & Management
+Where People and Organizations Meet Technology,Stanton,Digital Innovation & Management
+Where People and Organizations Meet Technology,Zhang,Digital Innovation & Management
+Where People and Organizations Meet Technology,Banks,Human-Centered Technology and Design
+Where People and Organizations Meet Technology,Baobao,Human-Centered Technology and Design
+Where People and Organizations Meet Technology,Capano,Human-Centered Technology and Design
+Where People and Organizations Meet Technology,Cheon,Human-Centered Technology and Design
+Where People and Organizations Meet Technology,Clarke,Human-Centered Technology and Design
+Where People and Organizations Meet Technology,Crowston,Human-Centered Technology and Design
+Where People and Organizations Meet Technology,Dedrick,Human-Centered Technology and Design
+Where People and Organizations Meet Technology,Ekbia,Human-Centered Technology and Design
+Where People and Organizations Meet Technology,Erdogan,Human-Centered Technology and Design
+Where People and Organizations Meet Technology,Himmelreich,Human-Centered Technology and Design
+Where People and Organizations Meet Technology,Introne,Human-Centered Technology and Design
+Where People and Organizations Meet Technology,Oesterlund,Human-Centered Technology and Design
+Libraries and Cultural Informatics,Arnone,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Chancellor,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Clarke,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Clarke,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Ekbia,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Gray,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Modrow,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Oakleaf,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Patin,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Qin,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Small,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Tacheva,Libraries and Cultural Informatics
+Libraries and Cultural Informatics,Yu,Libraries and Cultural Informatics
+Where People and Organizations Meet Technology,Banks,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Baobao,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Bastidas,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Cheon,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Crowston,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Ekbia,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Erickson,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Fudge,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Himmelreich,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Introne,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,King,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Oakleaf,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Oesterlund,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Sawyer,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Stromer-Galley,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Tacheva,Where people meet Artificial Intelligence
+Where People and Organizations Meet Technology,Yu,Where people meet Artificial Intelligence
